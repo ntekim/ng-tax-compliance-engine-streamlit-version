@@ -18,4 +18,4 @@ streamlit
 watchdog
 
 # --- Utilities ---
-requests
+requests 
