@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "silver-impulse-481722-v5",
+  "private_key_id": "39c2439593628a59353de4822fd1b37eab9701c8",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDbfAXYyEZPxyN/\nMIRXgW3ipOyPqRZ0YWqqy7Kh6Np9zURCWlszA/xU0yIQQ4Zr9y+3NapxM+3QYiYF\n6h3ni9l4LphA+0lHvm0Xl73pSy8/0HjVu0oV3mNTUrPD7IUC+YA3Kt4M4XAV2w2r\nrkYSfzYob6ssdQsmSDULgM8ahtDLBuE9MUjy31wUid5cr4kDuofuuUy6MI40oEqz\nI5EU1+59wVTVZLmx8ENJ0KD9XVxkMyZhhMgw4sjvPZe/8kt9tVna0im57V3+NCci\nnk6m+BTPvcLfEUt8M8rPwpoTNnrNzQwyJORasB0IKe+jRpKaHEy2zKBjwM2OuPSP\n2cD6vxnJAgMBAAECggEACFxemqXya7qRwxgVioHPLkmLC2PtC4zkc9IjoWBN5mnp\n1j875yMZOx/51bXEypsVcby1G+/W+M+sVCBZeEcPBzF7MkqAPZ/m5vWsUdU/3QXz\nfGzQgynADd4CJA3/+R+I/1D+OW5jByobiLUwTScUaJDsa9qfjJtGjgQfn4qQLJOp\n63ZunE++gfKuqkSELbbtmap/V8Z9/+mmbwkAbFbAAqkrnWrk4bCEL4+EnOROapK2\nTc5qg/lgRi2ZYZSR823/AmA2zCnnaZEIhx1LaOlonNn6fXBKciROQGKEyK8SxkMT\nRfXNz5BYD8ACPjmUMmldnaQXeKi0MsGTaw1UM7yQSwKBgQD8df6WE8d9KwqNNZi5\n2acNZXUMxzy2G+Jg6uUydBnqDvyUZn1mKYSpf5341lUfBoIxk7fGgdsWzSlQvX7v\niLeAoRqeDPfnKND8Zgyz+3BOq3NKHAbW+GPqhYO6mF+DnK8lTXILLM/Egm8FEqKc\njpodl7T8gBD9sZJureXq4VXXXwKBgQDej6+W2iKAp6UXu8I3YE+JclaNi+nEQ6QW\nhgHSanqcQfBAzwmLkHr+vG+nCKLlI72vLMjsUIwa+nWIq5npkdZgInfMCMQU6E/u\nK2KjAZVBhrkvCqODY/9qf8wBwohEhs6u88O9gYk44MgYBORQscbIbGOP60HMIAg0\nF00TDgBn1wKBgDzXat1cMu1VXBuf2QihDYNK+iR0N4tjuPDGayn3lO81YWWaNYpT\nYyc+HCIF9Ume1e2Avf9W+CfMlbJhmJ+9gQu8x59jXLMWwRayuUj+xZgP9Z7clkFk\nZx/zwUVMx2f+cK86tMtAp2miTYMZdJrqOvX6w6E+c9nP24xU2F38pCVdAoGAc93s\nNSX1RnOA0J1QXFIItm7PPruzhRkN6Sf09N24XXc6pBLlTkJ2tf3WRuiJHbAAxZ0U\nMWsxta3k2LU12NKy/7OSGKgLpTLYwg7WODTPxqBj8migffvmckR8KgJjvQFNwuln\nY1Z34SOtKEwLrTMQYTGEl92LkMCwZKYo2x2z+lsCgYEA3wwky1m1Qgz5lYWUN150\nUUehxI04V4qr4q9d9GkpPSTzcsTPIm3bjMojfw7/AcMkuioyJQLiHUpEHKMN9qMh\nmL48wKFgYlYj2nEmu6IXxhmNCmpEf3VRS9y1mvaDJRr68KBmO/8JMSK08RS0BOIY\nQI/cndTsgMKF7qhteY81vvM=\n-----END PRIVATE KEY-----\n",
+  "client_email": "betawork@silver-impulse-481722-v5.iam.gserviceaccount.com",
+  "client_id": "113435610414130841638",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/betawork%40silver-impulse-481722-v5.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

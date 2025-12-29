@@ -1,0 +1,21 @@
+# --- Core Framework ---
+fastapi
+uvicorn
+
+# --- Data Validation ---
+pydantic
+
+# --- Google Cloud & AI ---
+google-cloud-aiplatform
+google-cloud-discoveryengine
+google-cloud-bigquery
+
+# --- Observability ---
+ddtrace
+
+# --- Frontend / UI ---
+streamlit
+watchdog
+
+# --- Utilities ---
+requests
