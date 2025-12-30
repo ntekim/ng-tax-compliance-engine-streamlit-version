@@ -10,17 +10,21 @@ from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 from google.cloud import discoveryengine_v1beta as discoveryengine
 from vertexai.generative_models import GenerativeModel
+from google.oauth2 import service_account # New Import
 
-# --- 1. CRITICAL AUTH SETUP (MUST BE AT TOP) ---
+# --- 1. CRITICAL AUTH SETUP ---
+CREDENTIALS_FILE = "gcp_key.json"
+
 if os.getenv("GCP_CREDENTIALS_BASE64"):
     try:
         print("🔐 Found Base64 Credentials. Decoding...")
         decoded_key = base64.b64decode(os.getenv("GCP_CREDENTIALS_BASE64"))
-        with open("gcp_key.json", "w") as f:
+        with open(CREDENTIALS_FILE, "w") as f:
             f.write(decoded_key.decode("utf-8"))
         
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath("gcp_key.json")
-        print(f"✅ Auth File Created at: {os.environ['GOOGLE_APPLICATION_CREDENTIALS']}")
+        # Explicitly set the env var
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(CREDENTIALS_FILE)
+        print(f"✅ Auth File Created at: {os.path.abspath(CREDENTIALS_FILE)}")
     except Exception as e:
         print(f"❌ FATAL: Failed to decode credentials: {e}")
 
@@ -47,12 +51,19 @@ except:
     tracer = DummyTracer()
 
 # --- 4. INIT VERTEX AI ---
+# --- 4. INIT VERTEX AI (Move logic inside a function or check) ---
+model = None
 try:
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
-    model = GenerativeModel("gemini-2.5-pro")
+    # Explicitly load credentials to verify they work before init
+    if os.path.exists(CREDENTIALS_FILE):
+        vertexai.init(project=PROJECT_ID, location=LOCATION)
+        model = GenerativeModel("gemini-2.5-pro")
+        print("✅ Vertex AI Initialized Successfully")
+    else:
+        print("❌ Credentials file not found!")
 except Exception as e:
     model = None
-    logger.error(f"Vertex Init Error (Check Credentials): {e}")
+    logger.error(f"Vertex Init Error: {e}")
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
