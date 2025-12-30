@@ -6,12 +6,12 @@ import uvicorn
 import vertexai
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from typing import Optional
 from google.cloud import discoveryengine_v1beta as discoveryengine
 from vertexai.generative_models import GenerativeModel
 
 # --- 1. CRITICAL AUTH SETUP (MUST BE AT TOP) ---
-# This converts the Render Environment Variable back into a file
 if os.getenv("GCP_CREDENTIALS_BASE64"):
     try:
         print("🔐 Found Base64 Credentials. Decoding...")
@@ -19,7 +19,6 @@ if os.getenv("GCP_CREDENTIALS_BASE64"):
         with open("gcp_key.json", "w") as f:
             f.write(decoded_key.decode("utf-8"))
         
-        # Set the Env Var that Google Libraries look for
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath("gcp_key.json")
         print(f"✅ Auth File Created at: {os.environ['GOOGLE_APPLICATION_CREDENTIALS']}")
     except Exception as e:
@@ -62,16 +61,17 @@ if DD_ENABLED:
 
 # --- 5. DATA MODEL (Flexible) ---
 class QueryRequest(BaseModel):
-    # Allow 'query' OR 'question' to prevent 422 errors
-    query: str = Field(alias="question", default=None) 
+    query: Optional[str] = None
+    question: Optional[str] = None
     mode: str = "tax"
 
-    # Custom validator to handle if user sends 'query' directly
-    def __init__(self, **data):
-        # If user sent 'query', use it. If 'question', map it to query.
-        if 'question' in data:
+    @model_validator(mode='before')
+    @classmethod
+    def check_query_or_question(cls, data):
+        # Allow 'question' to populate 'query' if 'query' is missing
+        if not data.get('query') and data.get('question'):
             data['query'] = data['question']
-        super().__init__(**data)
+        return data
 
 # --- 6. LOGIC ---
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
@@ -110,12 +110,18 @@ def get_ai_response(user_query: str, mode: str):
 
 @app.post("/ask")
 async def ask_endpoint(req: QueryRequest):
-    if not req.query:
+    # Ensure we have a valid query string from either field
+    final_query = req.query or req.question
+    
+    if not final_query:
         raise HTTPException(status_code=400, detail="Please provide a 'query' or 'question'")
     
-    answer = get_ai_response(req.query, req.mode)
+    answer = get_ai_response(final_query, req.mode)
     return {"answer": answer}
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    import uvicorn
+    # Render provides the PORT env var. Default to 10000 locally.
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🚀 Starting Server on 0.0.0.0:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
