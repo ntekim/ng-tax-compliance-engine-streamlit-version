@@ -7,7 +7,7 @@ import os
 # CONFIGURATION
 # If running inside Docker Compose, use the service name.
 # If running locally while API is in Docker, use localhost.
-API_URL = os.getenv("API_URL", "https://betawork.onrender.com/ask") 
+API_URL = os.getenv("API_URL", "https://betawork.onrender.com/api/vi/ask") 
 
 st.set_page_config(
     page_title="BetaBot Logic Engine",
