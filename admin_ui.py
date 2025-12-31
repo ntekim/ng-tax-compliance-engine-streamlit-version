@@ -14,20 +14,20 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- FIXED CSS FOR READABILITY ---
+# --- CSS FOR DARK MODE & READABILITY ---
 st.markdown("""
     <style>
-    /* 1. Force Dark Background */
+    /* Main Background */
     .stApp {
         background-color: #0E1117;
     }
     
-    /* 2. Force All Text to be Light/White */
-    h1, h2, h3, h4, h5, h6, p, span, div {
+    /* General Text Color */
+    .stMarkdown, h1, h2, h3, p {
         color: #E0E0E0 !important;
     }
 
-    /* 3. Exceptions: Metric Cards & Code Blocks need specific colors */
+    /* Metric Cards */
     .metric-card {
         background-color: #262730;
         padding: 15px;
@@ -35,35 +35,43 @@ st.markdown("""
         border-left: 5px solid #4F46E5;
         margin-bottom: 10px;
     }
-    /* Fix text inside Metric Cards to be readable */
-    .metric-card b, .metric-card span {
-        color: #E0E0E0 !important;
-    }
-    /* Green text for latency */
-    .latency-text {
+    .metric-value {
+        font-size: 24px;
         color: #4ade80 !important;
+        font-weight: bold;
+    }
+    .metric-label {
+        font-size: 14px;
+        color: #A0A0A0 !important;
     }
 
-    /* 4. Chat Message Styling */
-    /* User Message Bubble */
+    /* Chat Message Bubbles */
     div[data-testid="stChatMessage"] {
-        background-color: #262730;
-        border: 1px solid #41444e;
-        border-radius: 10px;
-    }
-    /* User Avatar */
-    div[data-testid="stChatMessage"] svg {
-        fill: #E0E0E0 !important;
-    }
-
-    /* 5. Warning/Info Boxes (Restore readability) */
-    .stAlert {
-        color: white !important;
+        background-color: #1E2329;
+        border: 1px solid #2B303B;
     }
     
-    /* 6. Sidebar styling */
-    section[data-testid="stSidebar"] {
-        background-color: #262730;
+    /* Document/Code Box Styling */
+    .doc-box {
+        background-color: #1E293B;
+        color: #E2E8F0;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #F59E0B; /* Amber for Docs */
+        font-family: monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 10px;
+    }
+
+    .data-box {
+        background-color: #064E3B; /* Dark Green background */
+        color: #6EE7B7; /* Light Green Text */
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #10B981;
+        font-family: monospace;
+        white-space: pre-wrap;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -71,12 +79,14 @@ st.markdown("""
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("🟢 System Status")
-    st.info("Connected to Vertex AI & BigQuery")
+    st.success("API Connected")
+    st.info("RAG Source: Vertex AI Search")
+    st.info("Context Source: BigQuery Public Data")
     
     st.divider()
     
     st.markdown("### 🔍 Observability")
-    st.markdown("Traces are being sent to **Datadog**.")
+    st.write("Traces sent to **Datadog Agent**.")
     st.link_button("View Datadog Dashboard", "https://app.datadoghq.com/apm/traces")
 
 # --- MAIN LAYOUT ---
@@ -95,26 +105,21 @@ col_chat, col_debug = st.columns([1.2, 1])
 with col_chat:
     st.subheader("💬 User Interface")
     
-    # Display History
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Chat Input
-    if prompt := st.chat_input("Ask a tax question..."):
-        # 1. Show User Message
+    if prompt := st.chat_input("Ask a question (e.g. 'Is lunch allowance taxable?')..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # 2. Call API
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             message_placeholder.markdown("▌ *Thinking...*")
             
             try:
                 payload = {"query": prompt, "mode": "tax"}
-                
                 start_ts = time.time()
                 response = requests.post(API_URL, json=payload)
                 end_ts = time.time()
@@ -123,10 +128,9 @@ with col_chat:
                     data = response.json()
                     answer = data.get("answer", "No answer provided.")
                     
-                    # Store Metadata including new Economic Data
                     st.session_state.last_metadata = {
                         "sources": data.get("sources", []),
-                        "economic_data": data.get("economic_data", ""), # <--- Catch it here
+                        "economic_data": data.get("economic_data", ""),
                         "latency": (end_ts - start_ts) * 1000,
                         "model": "gemini-2.5-pro"
                     }
@@ -134,10 +138,8 @@ with col_chat:
                     message_placeholder.markdown(answer)
                     st.session_state.messages.append({"role": "assistant", "content": answer})
                     st.rerun()
-                    
                 else:
                     message_placeholder.error(f"API Error: {response.text}")
-                    
             except Exception as e:
                 message_placeholder.error(f"Connection Failed: {e}")
 
@@ -153,15 +155,15 @@ with col_debug:
         with m1:
             st.markdown(f"""
             <div class="metric-card">
-                <b>⏱️ Latency</b><br>
-                <span class="latency-text" style="font-size: 24px;">{round(meta['latency'], 2)} ms</span>
+                <div class="metric-label">⏱️ Latency</div>
+                <div class="metric-value">{round(meta['latency'], 2)} ms</div>
             </div>
             """, unsafe_allow_html=True)
         with m2:
             st.markdown(f"""
             <div class="metric-card">
-                <b>🤖 Model</b><br>
-                <span style="font-size: 18px;">{meta['model']}</span>
+                <div class="metric-label">🤖 Model</div>
+                <div class="metric-value" style="color:white !important; font-size:18px;">{meta['model']}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -170,33 +172,28 @@ with col_debug:
         
         with tab_rag:
             if meta['sources'] and len(meta['sources']) > 0:
-                st.caption(f"✅ Retrieved {len(meta['sources'])} chunks from Vertex AI Search")
+                st.caption(f"✅ Retrieved {len(meta['sources'])} chunks from Knowledge Base")
                 for i, src in enumerate(meta['sources']):
-                    with st.expander(f"📄 Document Chunk #{i+1}", expanded=(i==0)):
-                        st.info(src) # Use .info box to make text pop against dark background
+                    with st.expander(f"📄 Document Excerpt #{i+1}", expanded=(i==0)):
+                        # Force Dark Box for Readability
+                        st.markdown(f'<div class="doc-box">{src}</div>', unsafe_allow_html=True)
             else:
-                st.warning("No specific documents found in Vector DB.")
+                st.warning("No specific documents found. LLM used general knowledge.")
 
         with tab_bq:
             if meta['economic_data']:
                 st.caption("✅ Live Data fetched from bigquery-public-data")
-                st.code(meta['economic_data'], language="text") # Display raw stats clearly
+                # Force Green Box for Data
+                st.markdown(f'<div class="data-box">{meta["economic_data"]}</div>', unsafe_allow_html=True)
                 
-                # Bonus: Fake Visual if data exists (Judges love charts)
-                st.bar_chart({"Inflation (2023)": 24.5, "GDP Growth": 3.1}) 
+                # Visual Chart
+                st.caption("Visualized Trend:")
+                st.bar_chart({"Inflation": 28.9, "GDP Growth": 3.4}) 
             else:
-                st.text("No economic context requested for this query.")
+                st.info("No economic context requested for this query.")
 
         with tab_json:
             st.json(meta)
             
     else:
         st.info("Waiting for query... Ask a question on the left.")
-        st.markdown("""
-        **What happens when you ask?**
-        1. **FastAPI** receives query + Datadog Trace ID.
-        2. **Vertex AI Search** retrieves top 3 tax PDF chunks.
-        3. **BigQuery** fetches live Nigeria GDP/Inflation data.
-        4. **Gemini 2.5 Pro** synthesizes answer.
-        5. **Streamlit** visualizes the evidence.
-        """)

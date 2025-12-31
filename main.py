@@ -81,9 +81,14 @@ class QueryRequest(BaseModel):
             data['query'] = data['question']
         return data
 
+#Update Response Model to hold Objects, not just Strings
+class SourceDoc(BaseModel):
+    source: str
+    content: str
+
 class APIResponse(BaseModel):
     answer: str
-    sources: List[str]
+    sources: List[SourceDoc] # List of Objects now
     economic_data: str
 
 # --- 6. LOGIC ---
@@ -106,61 +111,54 @@ def get_economic_context():
         return ""
 
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
-def search_nigerian_laws(query: str):
-    """Robust Search that checks all possible result fields."""
+def search_nigerian_laws(query: str) -> List[dict]:
     if not my_credentials: return []
 
     try:
-        # Use Default Client (Global Endpoint)
-        client = discoveryengine.SearchServiceClient(credentials=my_credentials)
+        client_options = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
+        client = discoveryengine.SearchServiceClient(credentials=my_credentials, client_options=client_options)
         
         serving_config = (
             f"projects/{PROJECT_ID}/locations/global/collections/default_collection/"
             f"dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
         )
         
-        # Add query expansion to find related terms
         req = discoveryengine.SearchRequest(
             serving_config=serving_config, 
             query=query, 
-            page_size=3,
-            query_expansion_spec={"condition": "AUTO"},
-            spell_correction_spec={"mode": "AUTO"}
+            page_size=3
         )
         
         response = client.search(req)
-        print(f"🔎 Results Found: {len(response.results)}")
         
         sources = []
         for result in response.results:
-            # Convert to Dict
             data = MessageToDict(result.document._pb)
             derived = data.get("derivedStructData", {})
             
-            # THE FIX: Check 'extractive_answers'
-            if "extractive_answers" in derived:
-                for answer in derived["extractive_answers"]:
-                    # Grab the 'content' field
-                    text = answer.get("content", "")
-                    if text:
-                        sources.append(text)
+            # FIX 2: Extract Title/Filename
+            # Google often puts title in 'title' or 'link' (filename)
+            title = derived.get("title")
+            if not title:
+                # Fallback to filename from GS Link
+                link = derived.get("link", "Unknown Document")
+                title = link.split("/")[-1].replace(".pdf", "")
             
-            # Fallback (Keep these just in case)
+            content = ""
+            if "extractiveAnswers" in derived:
+                content = derived["extractiveAnswers"][0].get("content", "")
             elif "snippets" in derived:
-                for s in derived["snippets"]:
-                    sources.append(s.get("snippet", ""))
+                content = derived["snippets"][0].get("snippet", "")
             
-            elif "extractive_segments" in derived:
-                for s in derived["extractive_segments"]:
-                    sources.append(s.get("content", ""))
-
-        return sources[:3] # Return top 3
-        
+            if content:
+                sources.append({"source": title, "content": content})
+                
+        return sources
     except Exception as e:
         logger.error(f"Search API Error: {e}")
         return []
 
-tracer.wrap(name="generate_answer", service="betawork-ai-engine")
+@tracer.wrap(name="generate_answer", service="betawork-ai-engine")
 def get_ai_response(user_query: str, mode: str):
     if not model: return "AI System Offline.", []
     
@@ -173,12 +171,17 @@ def get_ai_response(user_query: str, mode: str):
             return "I am listening.", []
 
     # 2. Business/Tax Mode
-    sources = search_nigerian_laws(user_query)
+    sources_list = search_nigerian_laws(user_query)
     econ_data = get_economic_context()
     
+    # FIX 3: Pass Source Name to LLM Context
     rag_text = ""
-    if sources:
-        rag_text = "OFFICIAL DOCUMENTS:\n" + "\n".join(sources)
+    if sources_list:
+        rag_text = "OFFICIAL SOURCES:\n"
+        for i, doc in enumerate(sources_list):
+            rag_text += f"SOURCE {i+1} [{doc['source']}]: {doc['content']}\n\n"
+    else:
+        rag_text = "No specific document found."
     
     # THE HYBRID PROMPT
     prompt = f"""
@@ -187,6 +190,7 @@ def get_ai_response(user_query: str, mode: str):
 
     ECONOMIC CONTEXT:
     {econ_data}
+
     {rag_text}
 
     USER QUESTION: "{user_query}"
@@ -209,7 +213,7 @@ def get_ai_response(user_query: str, mode: str):
 
     try:
         response = model.generate_content(prompt)
-        return response.text, sources, econ_data
+        return response.text, sources_list, econ_data
     except Exception as e:
         return f"Thinking Error: {e}", []
     
