@@ -9,21 +9,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List
 from google.cloud import discoveryengine_v1beta as discoveryengine
+from google.cloud import bigquery
 from vertexai.generative_models import GenerativeModel
 from google.oauth2 import service_account
 from google.api_core.client_options import ClientOptions
 
-# --- CONFIGURATION ---
+# --- 1. CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("betabot")
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "silver-impulse-481722-v5")
-ENGINE_ID = "nigeria-compliance-engine_1766620713359"
-DATA_STORE_ID = "nigeria-compliance-engine_1766620773637"
+# The App ID from your screenshot (Ending in 13359) used for path construction
+ENGINE_ID = "nigeria-compliance-engine_1766620713359" 
 LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 CREDENTIALS_FILE = os.path.abspath("gcp_key.json")
 
-# --- AUTH SETUP ---
+# --- 2. AUTH SETUP ---
 my_credentials = None
 if os.getenv("GCP_CREDENTIALS_BASE64"):
     try:
@@ -35,15 +36,20 @@ if os.getenv("GCP_CREDENTIALS_BASE64"):
     except Exception as e:
         logger.error(f"Auth Error: {e}")
 
-# --- VERTEX INIT ---
+# --- 3. INIT CLIENTS ---
 model = None
+bq_client = None
 try:
+    # Vertex AI
     vertexai.init(project=PROJECT_ID, location=LOCATION)
     model = GenerativeModel("gemini-2.5-pro")
+    
+    # BigQuery
+    bq_client = bigquery.Client(project=PROJECT_ID, credentials=my_credentials)
 except Exception as e:
-    logger.error(f"Vertex Init Failed: {e}")
+    logger.error(f"Service Init Error: {e}")
 
-# --- DATADOG DUMMY ---
+# --- 4. DATADOG DUMMY ---
 try:
     from ddtrace import tracer, patch_all
     from ddtrace.contrib.fastapi import TraceMiddleware
@@ -62,7 +68,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 if DD_ENABLED:
     app.add_middleware(TraceMiddleware, service="betawork-ai-engine")
 
-# --- DATA MODELS ---
+# --- 5. DATA MODELS ---
 class QueryRequest(BaseModel):
     query: Optional[str] = None
     question: Optional[str] = None
@@ -78,109 +84,109 @@ class APIResponse(BaseModel):
     answer: str
     sources: List[str]
 
-# --- THE KNOWLEDGE BASE (Your "Manual RAG") ---
-NIGERIA_TAX_DATA = """
-OFFICIAL NIGERIAN TAX GUIDE (2025):
+# --- 6. LOGIC ---
 
-1. **VAT (Value Added Tax):**
-   - **Rate:** 7.5%
-   - **Deadline:** Remit by the 21st of the following month.
-   - **Penalty:** Failure to remit attracts a fine of ₦50,000 + 5% interest.
-
-2. **CIT (Company Income Tax):**
-   - **Small Company** (<₦25m turnover): **0% Tax Rate**.
-   - **Medium Company** (₦25m-₦100m): **20% Tax Rate**.
-   - **Large Company** (>₦100m): **30% Tax Rate**.
-
-3. **PAYE (Personal Income Tax):**
-   - Must be remitted to the **State IRS** (e.g., LIRS) where the employee resides.
-   - **Deadline:** 10th of the following month.
-   - **Calculation:** Gross Income - (Consolidated Relief Allowance + Pension + NHF) = Taxable Income.
-
-4. **NELFUND (Student Loan):**
-   - Employers must deduct **10%** from the salary of beneficiaries.
-
-5. **Remote Workers (USD Income):**
-   - Residents in Nigeria earning foreign income **MUST declare it**.
-   - You can reduce tax liability by deducting business expenses (Laptop, Internet, Generator) before declaring profit.
-"""
-
-# --- LOGIC ---
-
-def execute_search(client, path, query):
+def get_economic_context():
+    """Fetches Live GDP/Inflation data from Public BigQuery"""
+    if not bq_client: return ""
     try:
-        req = discoveryengine.SearchRequest(serving_config=path, query=query, page_size=3)
-        return client.search(req)
-    except:
-        return None
+        query = """
+            SELECT indicator_name, value, year
+            FROM `bigquery-public-data.world_bank_wdi.indicators`
+            WHERE country_code = 'NGA'
+            AND indicator_code IN ('NY.GDP.MKTP.KD.ZG', 'FP.CPI.TOTL.ZG')
+            ORDER BY year DESC LIMIT 3
+        """
+        results = bq_client.query(query).result()
+        stats = [f"- {row.indicator_name} ({row.year}): {row.value:.2f}%" for row in results]
+        return "\n".join(stats)
+    except Exception as e:
+        logger.error(f"BigQuery Error: {e}")
+        return ""
 
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
-def search_nigerian_laws(query: str):
+def search_documents(query: str):
     if not my_credentials: return []
 
     try:
         client_opts = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
         client = discoveryengine.SearchServiceClient(credentials=my_credentials, client_options=client_opts)
         
-        # Path A: Engine
-        path_engine = f"projects/{PROJECT_ID}/locations/global/collections/default_collection/engines/{ENGINE_ID}/servingConfigs/default_search"
-        # Path B: DataStore
-        path_ds = f"projects/{PROJECT_ID}/locations/global/collections/default_collection/dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
-
-        response = execute_search(client, path_engine, query)
-        if not response or len(response.results) == 0:
-             response = execute_search(client, path_ds, query)
-
-        sources = []
-        if response and hasattr(response, 'results'):
-            for result in response.results:
-                data = result.document.derived_struct_data
-                if 'snippets' in data and len(data['snippets']) > 0:
-                    sources.append(data['snippets'][0].get('snippet', ''))
-                elif 'extractive_segments' in data and len(data['extractive_segments']) > 0:
-                    sources.append(data['extractive_segments'][0].get('content', ''))
+        # Use the Engine path which wraps the Data Store
+        serving_config = (
+            f"projects/{PROJECT_ID}/locations/global/collections/default_collection/"
+            f"engines/{ENGINE_ID}/servingConfigs/default_search"
+        )
         
-        return sources
+        req = discoveryengine.SearchRequest(
+            serving_config=serving_config, 
+            query=query, 
+            page_size=3,
+            # Enable Spell Check & Query Expansion to find PDF text better
+            query_expansion_spec={"condition": "AUTO"},
+            spell_correction_spec={"mode": "AUTO"}
+        )
+        
+        response = client.search(req)
+        
+        sources = []
+        for result in response.results:
+            data = result.document.derived_struct_data
+            
+            # 1. Try Extractive Segments (Best for PDFs)
+            if 'extractive_segments' in data:
+                for seg in data['extractive_segments']:
+                    sources.append(seg.get('content', ''))
+            
+            # 2. Try Snippets (Fallback)
+            elif 'snippets' in data:
+                for snip in data['snippets']:
+                    sources.append(snip.get('snippet', ''))
+            
+        return sources[:3] # Return top 3 chunks
     except Exception as e:
-        logger.error(f"Search Fail: {e}")
+        logger.error(f"Search API Error: {e}")
         return []
 
 @tracer.wrap(name="generate_answer", service="betawork-ai-engine")
 def get_ai_response(user_query: str, mode: str):
     if not model: return "AI System Offline.", []
     
+    # Mode 1: Therapy
     if mode == "therapy":
-        prompt = f"You are BetaCare. User: '{user_query}'. Be empathetic."
+        prompt = f"You are BetaCare, a workplace therapist. User: '{user_query}'. Be empathetic, warm, and professional."
         try:
             return model.generate_content(prompt).text, []
         except:
-            return "I am here to listen.", []
+            return "I am listening.", []
 
-    # --- TAX MODE ---
+    # Mode 2: Business/Tax
     
-    # 1. Try RAG
-    sources = search_nigerian_laws(user_query)
+    # A. Fetch Context
+    sources = search_documents(user_query)
+    econ_data = get_economic_context()
     
-    # 2. EMERGENCY FIX: If RAG is empty, inject Manual Data as a "Source"
-    if not sources:
-        print("⚠️ RAG returned 0. Using Synthetic Source.")
-        sources = [NIGERIA_TAX_DATA] # <--- THIS FIXES THE UI
+    # B. Build Context String
+    rag_text = ""
+    if sources:
+        rag_text = "OFFICIAL DOCUMENTS FOUND:\n" + "\n---\n".join(sources)
     
-    # 3. Construct Prompt
-    context_text = "\n\n".join(sources)
-    
+    # C. The "Balanced" Prompt
     prompt = f"""
-    ROLE: You are BetaBot, the official Tax Advisor for BetaWork Nigeria.
+    You are BetaBot, an intelligent Business & Tax Advisor for Nigeria.
     
-    OFFICIAL DATA SOURCES:
-    {context_text}
+    ECONOMIC CONTEXT:
+    {econ_data}
+    
+    {rag_text}
     
     USER QUESTION: "{user_query}"
     
     INSTRUCTIONS:
-    1. Answer specifically using the OFFICIAL DATA SOURCES above.
-    2. Be very precise with numbers (e.g. "7.5%", "21st").
-    3. Keep it professional and short.
+    1. Answer the user's question clearly and professionally.
+    2. If the user asks about a general business concept (e.g., "How to market?", "What is cash flow?"), answer broadly but mention how it applies in Nigeria if relevant.
+    3. If the user asks about TAX or LAW, prioritize the 'OFFICIAL DOCUMENTS' provided above.
+    4. If no documents are found, use your general knowledge of FIRS, CAMA 2020, and Nigerian business practices.
     """
 
     try:
@@ -198,9 +204,8 @@ async def ask_endpoint(req: QueryRequest):
     final_query = req.query or req.question
     if not final_query: raise HTTPException(status_code=400, detail="Query required")
     
-    answer_text, source_list = get_ai_response(final_query, req.mode)
-    
-    return {"answer": answer_text, "sources": source_list}
+    answer, sources = get_ai_response(final_query, req.mode)
+    return {"answer": answer, "sources": sources}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
