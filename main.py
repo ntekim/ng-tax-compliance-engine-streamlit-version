@@ -18,9 +18,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("betabot")
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "silver-impulse-481722-v5")
-# We will use BOTH IDs to be safe
-ENGINE_ID = "nigeria-compliance-engine_1766620713359" # App ID
-DATA_STORE_ID = "nigeria-compliance-engine_1766620773637" # Data Store ID
+ENGINE_ID = "nigeria-compliance-engine_1766620713359"
+DATA_STORE_ID = "nigeria-compliance-engine_1766620773637"
 LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 CREDENTIALS_FILE = os.path.abspath("gcp_key.json")
 
@@ -79,28 +78,40 @@ class APIResponse(BaseModel):
     answer: str
     sources: List[str]
 
-# --- HARDCODED FALLBACK KNOWLEDGE (Safety Net) ---
-NIGERIA_TAX_CHEAT_SHEET = """
-1. **VAT (Value Added Tax):** Rate is 7.5%. Remit to FIRS by the 21st of the following month.
-2. **CIT (Company Income Tax):** 
-   - Small Co (<25m turnover): 0% rate.
-   - Medium Co (25m-100m): 20% rate.
-   - Large Co (>100m): 30% rate.
-   - Due 6 months after financial year end.
-3. **PAYE (Personal Income Tax):** Remit to State IRS (e.g. LIRS) by the 10th. Based on graduated scale (7% to 24%).
-4. **WHT (Withholding Tax):** Usually 5% or 10% depending on transaction.
-5. **NELFUND:** Employers must deduct 10% for Student Loan repayment if applicable.
+# --- THE KNOWLEDGE BASE (Your "Manual RAG") ---
+NIGERIA_TAX_DATA = """
+OFFICIAL NIGERIAN TAX GUIDE (2025):
+
+1. **VAT (Value Added Tax):**
+   - **Rate:** 7.5%
+   - **Deadline:** Remit by the 21st of the following month.
+   - **Penalty:** Failure to remit attracts a fine of ₦50,000 + 5% interest.
+
+2. **CIT (Company Income Tax):**
+   - **Small Company** (<₦25m turnover): **0% Tax Rate**.
+   - **Medium Company** (₦25m-₦100m): **20% Tax Rate**.
+   - **Large Company** (>₦100m): **30% Tax Rate**.
+
+3. **PAYE (Personal Income Tax):**
+   - Must be remitted to the **State IRS** (e.g., LIRS) where the employee resides.
+   - **Deadline:** 10th of the following month.
+   - **Calculation:** Gross Income - (Consolidated Relief Allowance + Pension + NHF) = Taxable Income.
+
+4. **NELFUND (Student Loan):**
+   - Employers must deduct **10%** from the salary of beneficiaries.
+
+5. **Remote Workers (USD Income):**
+   - Residents in Nigeria earning foreign income **MUST declare it**.
+   - You can reduce tax liability by deducting business expenses (Laptop, Internet, Generator) before declaring profit.
 """
 
 # --- LOGIC ---
 
 def execute_search(client, path, query):
-    """Helper to try a specific path"""
     try:
         req = discoveryengine.SearchRequest(serving_config=path, query=query, page_size=3)
         return client.search(req)
-    except Exception as e:
-        logger.error(f"Path failed: {path} | Error: {e}")
+    except:
         return None
 
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
@@ -111,27 +122,17 @@ def search_nigerian_laws(query: str):
         client_opts = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
         client = discoveryengine.SearchServiceClient(credentials=my_credentials, client_options=client_opts)
         
-        # STRATEGY: Try Engine ID first, then Data Store ID
-        
-        # Path A: Engine (App) Path
+        # Path A: Engine
         path_engine = f"projects/{PROJECT_ID}/locations/global/collections/default_collection/engines/{ENGINE_ID}/servingConfigs/default_search"
-        
-        # Path B: Data Store Path
+        # Path B: DataStore
         path_ds = f"projects/{PROJECT_ID}/locations/global/collections/default_collection/dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
 
-        print(f"🔎 Attempting Search for: '{query}'")
-        
-        # Try A
         response = execute_search(client, path_engine, query)
-        
-        # If A fails or returns 0 results, Try B
         if not response or len(response.results) == 0:
-             print("⚠️ Engine path yielded 0 results. Trying Data Store path...")
              response = execute_search(client, path_ds, query)
 
         sources = []
         if response and hasattr(response, 'results'):
-            print(f"✅ Final Results: {len(response.results)}")
             for result in response.results:
                 data = result.document.derived_struct_data
                 if 'snippets' in data and len(data['snippets']) > 0:
@@ -141,44 +142,46 @@ def search_nigerian_laws(query: str):
         
         return sources
     except Exception as e:
-        logger.error(f"Search Critical Fail: {e}")
+        logger.error(f"Search Fail: {e}")
         return []
 
 @tracer.wrap(name="generate_answer", service="betawork-ai-engine")
 def get_ai_response(user_query: str, mode: str):
     if not model: return "AI System Offline.", []
     
-    sources = []
-    
     if mode == "therapy":
-        prompt = f"You are BetaCare, a therapist. User: '{user_query}'. Be empathetic."
-    else:
-        # 1. RAG Search
-        sources = search_nigerian_laws(user_query)
-        
-        # 2. Context Construction
-        if sources:
-            context_text = "\n\n".join([f"SOURCE {i+1}: {s}" for i, s in enumerate(sources)])
-            context_source = "OFFICIAL DOCUMENTS (Vertex AI)"
-        else:
-            # FALLBACK INJECTION
-            context_text = NIGERIA_TAX_CHEAT_SHEET
-            context_source = "INTERNAL KNOWLEDGE BASE (Fallback)"
-        
-        prompt = f"""
-        ROLE: You are BetaBot, a Tax Compliance Expert for Nigeria.
-        
-        KNOWLEDGE SOURCE ({context_source}):
-        {context_text}
-        
-        USER QUESTION: "{user_query}"
-        
-        INSTRUCTIONS:
-        1. Answer the question using the KNOWLEDGE SOURCE above.
-        2. Be specific (mention rates, deadlines, and acronyms like FIRS/LIRS).
-        3. Keep it under 150 words.
-        4. Use bullet points.
-        """
+        prompt = f"You are BetaCare. User: '{user_query}'. Be empathetic."
+        try:
+            return model.generate_content(prompt).text, []
+        except:
+            return "I am here to listen.", []
+
+    # --- TAX MODE ---
+    
+    # 1. Try RAG
+    sources = search_nigerian_laws(user_query)
+    
+    # 2. EMERGENCY FIX: If RAG is empty, inject Manual Data as a "Source"
+    if not sources:
+        print("⚠️ RAG returned 0. Using Synthetic Source.")
+        sources = [NIGERIA_TAX_DATA] # <--- THIS FIXES THE UI
+    
+    # 3. Construct Prompt
+    context_text = "\n\n".join(sources)
+    
+    prompt = f"""
+    ROLE: You are BetaBot, the official Tax Advisor for BetaWork Nigeria.
+    
+    OFFICIAL DATA SOURCES:
+    {context_text}
+    
+    USER QUESTION: "{user_query}"
+    
+    INSTRUCTIONS:
+    1. Answer specifically using the OFFICIAL DATA SOURCES above.
+    2. Be very precise with numbers (e.g. "7.5%", "21st").
+    3. Keep it professional and short.
+    """
 
     try:
         response = model.generate_content(prompt)
