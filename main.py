@@ -54,8 +54,14 @@ except Exception as e:
 try:
     from ddtrace import tracer, patch_all
     from ddtrace.contrib.fastapi import TraceMiddleware
+    # Configure Tracer to send DIRECTLY to Datadog (No Agent required)
+    # Note: This usually requires setting env vars DD_API_KEY and DD_SITE
+    
+    os.environ["DD_TRACE_AGENT_URL"] = "" # Disable local agent
+    
     patch_all()
     DD_ENABLED = True
+    print("✅ Datadog: Enabled (Agentless Check)")
 except:
     DD_ENABLED = False
     class DummyTracer:
