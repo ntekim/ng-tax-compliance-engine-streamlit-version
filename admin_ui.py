@@ -5,24 +5,29 @@ import time
 import os
 
 # CONFIGURATION
-# If running inside Docker Compose, use the service name.
-# If running locally while API is in Docker, use localhost.
-API_URL = os.getenv("API_URL", "https://betawork.onrender.com/api/vi/ask") 
+API_URL = os.getenv("API_URL", "https://betawork-ai-engine.onrender.com/ask") 
 
 st.set_page_config(
-    page_title="BetaBot Logic Engine",
+    page_title="BetaBot Brain",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- CSS HACKS FOR "HACKATHON VIBE" ---
+# --- FIXED CSS FOR READABILITY ---
 st.markdown("""
     <style>
+    /* 1. Force Dark Background */
     .stApp {
         background-color: #0E1117;
-        color: white;
     }
+    
+    /* 2. Force All Text to be Light/White */
+    h1, h2, h3, h4, h5, h6, p, span, div {
+        color: #E0E0E0 !important;
+    }
+
+    /* 3. Exceptions: Metric Cards & Code Blocks need specific colors */
     .metric-card {
         background-color: #262730;
         padding: 15px;
@@ -30,27 +35,52 @@ st.markdown("""
         border-left: 5px solid #4F46E5;
         margin-bottom: 10px;
     }
+    /* Fix text inside Metric Cards to be readable */
+    .metric-card b, .metric-card span {
+        color: #E0E0E0 !important;
+    }
+    /* Green text for latency */
+    .latency-text {
+        color: #4ade80 !important;
+    }
+
+    /* 4. Chat Message Styling */
+    /* User Message Bubble */
+    div[data-testid="stChatMessage"] {
+        background-color: #262730;
+        border: 1px solid #41444e;
+        border-radius: 10px;
+    }
+    /* User Avatar */
+    div[data-testid="stChatMessage"] svg {
+        fill: #E0E0E0 !important;
+    }
+
+    /* 5. Warning/Info Boxes (Restore readability) */
+    .stAlert {
+        color: white !important;
+    }
+    
+    /* 6. Sidebar styling */
+    section[data-testid="stSidebar"] {
+        background-color: #262730;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- SIDEBAR: DATADOG STATUS ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/2/25/Datadog_logo.svg", width=150)
-    st.markdown("### 🟢 System Status")
-    
-    st.metric(label="Service", value="betawork-ai-engine")
-    st.metric(label="RAG Vector DB", value="Vertex AI Search")
-    st.metric(label="Economic Data", value="BigQuery Public")
+    st.header("🟢 System Status")
+    st.info("Connected to Vertex AI & BigQuery")
     
     st.divider()
     
     st.markdown("### 🔍 Observability")
-    st.info("Traces are being sent to Datadog Agent.")
-    st.link_button("View Datadog Dashboard", "https://us5.datadoghq.com/apm/traces")
+    st.markdown("Traces are being sent to **Datadog**.")
+    st.link_button("View Datadog Dashboard", "https://app.datadoghq.com/apm/traces")
 
 # --- MAIN LAYOUT ---
 st.title("🧠 BetaBot: Regulatory Command Center")
-st.markdown("*Hackathon Admin View: Analyzing reasoning, retrieval, and latency.*")
 
 # Initialize Chat History
 if "messages" not in st.session_state:
@@ -71,7 +101,7 @@ with col_chat:
             st.markdown(message["content"])
 
     # Chat Input
-    if prompt := st.chat_input("Ask a tax question (e.g. Is lunch allowance taxable?)"):
+    if prompt := st.chat_input("Ask a tax question..."):
         # 1. Show User Message
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -80,13 +110,11 @@ with col_chat:
         # 2. Call API
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
-            message_placeholder.markdown("▌ *Thinking (Querying Vector DB)...*")
+            message_placeholder.markdown("▌ *Thinking...*")
             
             try:
-                # Prepare Payload (Tax Mode)
                 payload = {"query": prompt, "mode": "tax"}
                 
-                # Request
                 start_ts = time.time()
                 response = requests.post(API_URL, json=payload)
                 end_ts = time.time()
@@ -95,25 +123,15 @@ with col_chat:
                     data = response.json()
                     answer = data.get("answer", "No answer provided.")
                     
-                    # Store Metadata for Right Column
                     st.session_state.last_metadata = {
                         "sources": data.get("sources", []),
                         "economic_data": data.get("economic_data", ""),
-                        "latency": data.get("latency_ms", (end_ts - start_ts)*1000),
-                        "model": data.get("model_used", "gemini-2.5-pro")
+                        "latency": (end_ts - start_ts) * 1000,
+                        "model": "gemini-2.5-pro"
                     }
                     
-                    # Typewriter Effect
-                    full_response = ""
-                    for chunk in answer.split():
-                        full_response += chunk + " "
-                        time.sleep(0.02)
-                        message_placeholder.markdown(full_response + "▌")
-                    message_placeholder.markdown(full_response)
-                    
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
-                    
-                    # Force refresh to update Right Column
+                    message_placeholder.markdown(answer)
+                    st.session_state.messages.append({"role": "assistant", "content": answer})
                     st.rerun()
                     
                 else:
@@ -135,7 +153,7 @@ with col_debug:
             st.markdown(f"""
             <div class="metric-card">
                 <b>⏱️ Latency</b><br>
-                <span style="font-size: 24px; color: #4ade80">{round(meta['latency'], 2)} ms</span>
+                <span class="latency-text" style="font-size: 24px;">{round(meta['latency'], 2)} ms</span>
             </div>
             """, unsafe_allow_html=True)
         with m2:
@@ -146,23 +164,20 @@ with col_debug:
             </div>
             """, unsafe_allow_html=True)
 
-        # 2. Tabs for Evidence
-        tab_rag, tab_bq, tab_json = st.tabs(["📚 RAG Sources", "📈 BigQuery Data", "⚙️ Raw JSON"])
+        # 2. Tabs
+        tab_rag, tab_bq, tab_json = st.tabs(["📚 RAG Sources", "📈 BigQuery Data", "⚙️ JSON"])
         
         with tab_rag:
-            st.caption("Legal Documents retrieved from Vertex AI Search")
-            if meta['sources']:
+            if meta['sources'] and len(meta['sources']) > 0:
                 for i, src in enumerate(meta['sources']):
                     with st.expander(f"📄 Document Chunk #{i+1}", expanded=(i==0)):
-                        st.code(src, language="text")
+                        st.text(src) # Use st.text to avoid markdown parsing errors
             else:
                 st.warning("No specific documents found. LLM used general knowledge.")
 
         with tab_bq:
-            st.caption("Economic Indicators from BigQuery Public Datasets")
             if meta['economic_data']:
                 st.info(meta['economic_data'])
-                st.bar_chart({"Inflation": 24.5, "GDP Growth": 3.1}) # Mock chart viz of the data
             else:
                 st.text("No economic context requested for this query.")
 
@@ -170,7 +185,7 @@ with col_debug:
             st.json(meta)
             
     else:
-        st.info("Waiting for query... Ask a question on the left to see the reasoning engine.")
+        st.info("Waiting for query... Ask a question on the left.")
         st.markdown("""
         **What happens when you ask?**
         1. **FastAPI** receives query + Datadog Trace ID.
