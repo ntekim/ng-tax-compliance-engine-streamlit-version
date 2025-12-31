@@ -93,7 +93,7 @@ def get_economic_context():
     try:
         query = """
             SELECT indicator_name, value, year
-            FROM `bigquery-public-data.world_bank_wdi.indicators`
+            FROM `bigquery-public-data.world_bank_wdi.indicators_data`
             WHERE country_code = 'NGA'
             AND indicator_code IN ('NY.GDP.MKTP.KD.ZG', 'FP.CPI.TOTL.ZG')
             ORDER BY year DESC LIMIT 3
@@ -132,36 +132,29 @@ def search_nigerian_laws(query: str):
         print(f"🔎 Results Found: {len(response.results)}")
         
         sources = []
-        for i, result in enumerate(response.results):
-
-            # DEBUG LOGGING: Print the structure of the first result
-            if i == 0:
-                print(f"--- DEBUG RESULT #{i} STRUCTURE ---")
-                # Convert the full Document object to dict and print keys
-                doc_dict = MessageToDict(result.document._pb)
-                print(json.dumps(doc_dict, indent=2)) 
-                print("-----------------------------------")
-
-            # ATTEMPT 1: Derived Struct Data (The standard place)
-            data = result.document.derived_struct_data
+        for result in response.results:
+            # Convert to Dict
+            data = MessageToDict(result.document._pb)
+            derived = data.get("derivedStructData", {})
             
-            # Check Snippets
-            if 'snippets' in data:
-                for s in data['snippets']:
-                    sources.append(s.get('snippet', ''))
+            # THE FIX: Check 'extractive_answers'
+            if "extractive_answers" in derived:
+                for answer in derived["extractive_answers"]:
+                    # Grab the 'content' field
+                    text = answer.get("content", "")
+                    if text:
+                        sources.append(text)
             
-            # Check Extractive Segments
-            if 'extractive_segments' in data:
-                for s in data['extractive_segments']:
-                    sources.append(s.get('content', ''))
-                    
-            # ATTEMPT 3: Raw Text (Fallback)
-            elif "structData" in data and "text" in data["structData"]:
-                sources.append(data["structData"]["text"][:500]) # First 500 chars
+            # Fallback (Keep these just in case)
+            elif "snippets" in derived:
+                for s in derived["snippets"]:
+                    sources.append(s.get("snippet", ""))
+            
+            elif "extractive_segments" in derived:
+                for s in derived["extractive_segments"]:
+                    sources.append(s.get("content", ""))
 
-        # Filter empty strings
-        clean_sources = [s for s in sources if s]
-        return clean_sources[:3] # Return top 3
+        return sources[:3] # Return top 3
         
     except Exception as e:
         logger.error(f"Search API Error: {e}")
