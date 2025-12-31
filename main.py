@@ -13,17 +13,18 @@ from vertexai.generative_models import GenerativeModel
 from google.oauth2 import service_account
 from google.api_core.client_options import ClientOptions
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("betabot")
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "silver-impulse-481722-v5")
-# Using the DATA STORE ID from your screenshot (Ending in 73637)
-DATA_STORE_ID = os.getenv("GCP_DATA_STORE_ID", "nigeria-compliance-engine_1766620773637")
+# We will use BOTH IDs to be safe
+ENGINE_ID = "nigeria-compliance-engine_1766620713359" # App ID
+DATA_STORE_ID = "nigeria-compliance-engine_1766620773637" # Data Store ID
 LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 CREDENTIALS_FILE = os.path.abspath("gcp_key.json")
 
-# --- 2. AUTH SETUP ---
+# --- AUTH SETUP ---
 my_credentials = None
 if os.getenv("GCP_CREDENTIALS_BASE64"):
     try:
@@ -33,9 +34,9 @@ if os.getenv("GCP_CREDENTIALS_BASE64"):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_FILE
         my_credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_FILE)
     except Exception as e:
-        print(f"❌ Auth Error: {e}")
+        logger.error(f"Auth Error: {e}")
 
-# --- 3. VERTEX INIT ---
+# --- VERTEX INIT ---
 model = None
 try:
     vertexai.init(project=PROJECT_ID, location=LOCATION)
@@ -43,7 +44,7 @@ try:
 except Exception as e:
     logger.error(f"Vertex Init Failed: {e}")
 
-# --- 4. DATADOG ---
+# --- DATADOG DUMMY ---
 try:
     from ddtrace import tracer, patch_all
     from ddtrace.contrib.fastapi import TraceMiddleware
@@ -62,12 +63,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 if DD_ENABLED:
     app.add_middleware(TraceMiddleware, service="betawork-ai-engine")
 
-# --- 5. DATA MODELS ---
+# --- DATA MODELS ---
 class QueryRequest(BaseModel):
     query: Optional[str] = None
     question: Optional[str] = None
     mode: str = "tax"
-
     @model_validator(mode='before')
     @classmethod
     def check_query_or_question(cls, data):
@@ -75,53 +75,73 @@ class QueryRequest(BaseModel):
             data['query'] = data['question']
         return data
 
-# Response Model for UI
 class APIResponse(BaseModel):
     answer: str
     sources: List[str]
 
-# --- 6. LOGIC ---
+# --- HARDCODED FALLBACK KNOWLEDGE (Safety Net) ---
+NIGERIA_TAX_CHEAT_SHEET = """
+1. **VAT (Value Added Tax):** Rate is 7.5%. Remit to FIRS by the 21st of the following month.
+2. **CIT (Company Income Tax):** 
+   - Small Co (<25m turnover): 0% rate.
+   - Medium Co (25m-100m): 20% rate.
+   - Large Co (>100m): 30% rate.
+   - Due 6 months after financial year end.
+3. **PAYE (Personal Income Tax):** Remit to State IRS (e.g. LIRS) by the 10th. Based on graduated scale (7% to 24%).
+4. **WHT (Withholding Tax):** Usually 5% or 10% depending on transaction.
+5. **NELFUND:** Employers must deduct 10% for Student Loan repayment if applicable.
+"""
+
+# --- LOGIC ---
+
+def execute_search(client, path, query):
+    """Helper to try a specific path"""
+    try:
+        req = discoveryengine.SearchRequest(serving_config=path, query=query, page_size=3)
+        return client.search(req)
+    except Exception as e:
+        logger.error(f"Path failed: {path} | Error: {e}")
+        return None
 
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
 def search_nigerian_laws(query: str):
-    """Returns List of Snippets"""
     if not my_credentials: return []
 
     try:
-        client_options = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
-        client = discoveryengine.SearchServiceClient(
-            credentials=my_credentials, 
-            client_options=client_options
-        )
+        client_opts = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
+        client = discoveryengine.SearchServiceClient(credentials=my_credentials, client_options=client_opts)
         
-        # Enhanced Query for better RAG hits
-        enhanced_query = f"{query} regarding Nigeria Tax Law"
+        # STRATEGY: Try Engine ID first, then Data Store ID
         
-        serving_config = (
-            f"projects/{PROJECT_ID}/locations/global/collections/default_collection/"
-            f"dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
-        )
+        # Path A: Engine (App) Path
+        path_engine = f"projects/{PROJECT_ID}/locations/global/collections/default_collection/engines/{ENGINE_ID}/servingConfigs/default_search"
         
-        req = discoveryengine.SearchRequest(
-            serving_config=serving_config, 
-            query=enhanced_query, 
-            page_size=3
-        )
+        # Path B: Data Store Path
+        path_ds = f"projects/{PROJECT_ID}/locations/global/collections/default_collection/dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
+
+        print(f"🔎 Attempting Search for: '{query}'")
         
-        response = client.search(req)
-        print(f"🔎 Results Found: {len(response.results)}")
+        # Try A
+        response = execute_search(client, path_engine, query)
         
+        # If A fails or returns 0 results, Try B
+        if not response or len(response.results) == 0:
+             print("⚠️ Engine path yielded 0 results. Trying Data Store path...")
+             response = execute_search(client, path_ds, query)
+
         sources = []
-        for result in response.results:
-            data = result.document.derived_struct_data
-            if 'snippets' in data and len(data['snippets']) > 0:
-                sources.append(data['snippets'][0].get('snippet', ''))
-            elif 'extractive_segments' in data and len(data['extractive_segments']) > 0:
-                sources.append(data['extractive_segments'][0].get('content', ''))
-                
+        if response and hasattr(response, 'results'):
+            print(f"✅ Final Results: {len(response.results)}")
+            for result in response.results:
+                data = result.document.derived_struct_data
+                if 'snippets' in data and len(data['snippets']) > 0:
+                    sources.append(data['snippets'][0].get('snippet', ''))
+                elif 'extractive_segments' in data and len(data['extractive_segments']) > 0:
+                    sources.append(data['extractive_segments'][0].get('content', ''))
+        
         return sources
     except Exception as e:
-        logger.error(f"Search API Error: {e}")
+        logger.error(f"Search Critical Fail: {e}")
         return []
 
 @tracer.wrap(name="generate_answer", service="betawork-ai-engine")
@@ -137,23 +157,27 @@ def get_ai_response(user_query: str, mode: str):
         sources = search_nigerian_laws(user_query)
         
         # 2. Context Construction
-        context_text = "\n\n".join([f"SOURCE {i+1}: {s}" for i, s in enumerate(sources)])
-        if not context_text:
-            context_text = "No specific document found. Use general knowledge of FIRS, LIRS, and Nigerian Finance Acts."
+        if sources:
+            context_text = "\n\n".join([f"SOURCE {i+1}: {s}" for i, s in enumerate(sources)])
+            context_source = "OFFICIAL DOCUMENTS (Vertex AI)"
+        else:
+            # FALLBACK INJECTION
+            context_text = NIGERIA_TAX_CHEAT_SHEET
+            context_source = "INTERNAL KNOWLEDGE BASE (Fallback)"
         
         prompt = f"""
-        ROLE: You are BetaBot, a specialized Tax Compliance Consultant for Nigerian SMEs.
+        ROLE: You are BetaBot, a Tax Compliance Expert for Nigeria.
         
-        CONTEXT FROM NIGERIAN DOCUMENTS:
+        KNOWLEDGE SOURCE ({context_source}):
         {context_text}
         
         USER QUESTION: "{user_query}"
         
-        RULES:
-        1. **STRICTLY NIGERIAN CONTEXT:** Never mention "IRS" (US). Only mention "FIRS" (Federal) or "State IRS".
-        2. **SIMPLICITY:** Explain it like you are talking to a business owner.
-        3. **FORMATTING:** Use short paragraphs and Bullet Points.
-        4. **ACTIONABLE:** Tell them exactly what to do next.
+        INSTRUCTIONS:
+        1. Answer the question using the KNOWLEDGE SOURCE above.
+        2. Be specific (mention rates, deadlines, and acronyms like FIRS/LIRS).
+        3. Keep it under 150 words.
+        4. Use bullet points.
         """
 
     try:
@@ -162,7 +186,7 @@ def get_ai_response(user_query: str, mode: str):
     except Exception as e:
         return f"Thinking Error: {e}", []
 
-# --- 7. ENDPOINTS ---
+# --- ENDPOINTS ---
 @app.get("/")
 def root(): return {"status": "running"}
 
