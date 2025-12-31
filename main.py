@@ -92,7 +92,7 @@ def get_economic_context():
         # Use a simpler query on a very standard table
         query = """
             SELECT indicator_name, value, year
-            FROM `bigquery-public-data.world_bank_wdi.indicators`
+            FROM `bigquery-public-data.world_bank_wdi.indicators_data`
             WHERE country_code = 'NGA'
             AND indicator_code IN ('NY.GDP.MKTP.KD.ZG', 'FP.CPI.TOTL.ZG')
             ORDER BY year DESC LIMIT 3
