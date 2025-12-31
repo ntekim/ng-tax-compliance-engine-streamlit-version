@@ -4,39 +4,47 @@ import base64
 import logging
 import uvicorn
 import vertexai
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 from google.cloud import discoveryengine_v1beta as discoveryengine
 from vertexai.generative_models import GenerativeModel
-from google.oauth2 import service_account # New Import
+from google.api_core.client_options import ClientOptions
 
-# --- 1. CRITICAL AUTH SETUP ---
-CREDENTIALS_FILE = "gcp_key.json"
+# --- 1. SETUP LOGGING & CONFIG ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("betabot")
 
+PROJECT_ID = os.getenv("GCP_PROJECT_ID", "silver-impulse-481722-v5")
+DATA_STORE_ID = os.getenv("GCP_DATA_STORE_ID", "nigeria-compliance-engine_1766620773637")
+LOCATION = os.getenv("GCP_LOCATION", "us-central1")
+CREDENTIALS_FILE = os.path.abspath("gcp_key.json")
+
+# --- 2. CRITICAL AUTH (WRITE FILE) ---
 if os.getenv("GCP_CREDENTIALS_BASE64"):
     try:
-        print("🔐 Found Base64 Credentials. Decoding...")
+        print("🔐 Decoding Credentials...")
         decoded_key = base64.b64decode(os.getenv("GCP_CREDENTIALS_BASE64"))
         with open(CREDENTIALS_FILE, "w") as f:
             f.write(decoded_key.decode("utf-8"))
         
-        # Explicitly set the env var
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(CREDENTIALS_FILE)
-        print(f"✅ Auth File Created at: {os.path.abspath(CREDENTIALS_FILE)}")
+        # Set Env Var for ALL Google Libraries
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_FILE
+        print(f"✅ Auth File Ready at: {CREDENTIALS_FILE}")
     except Exception as e:
-        print(f"❌ FATAL: Failed to decode credentials: {e}")
+        print(f"❌ FATAL Auth Error: {e}")
 
-# --- 2. CONFIGURATION ---
-PROJECT_ID = os.getenv("GCP_PROJECT_ID", "silver-impulse-481722-v5")
-DATA_STORE_ID = os.getenv("GCP_DATA_STORE_ID", "nigeria-compliance-engine_1766620773637")
-LOCATION = os.getenv("GCP_LOCATION", "us-central1")
+# --- 3. INIT AI MODELS ---
+model = None
+try:
+    vertexai.init(project=PROJECT_ID, location=LOCATION)
+    model = GenerativeModel("gemini-2.5-pro")
+    print("✅ Vertex AI Connected")
+except Exception as e:
+    logger.error(f"Vertex Init Failed: {e}")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("betabot")
-
-# --- 3. DATADOG DUMMY WRAPPER ---
+# --- 4. DATADOG DUMMY ---
 try:
     from ddtrace import tracer, patch_all
     from ddtrace.contrib.fastapi import TraceMiddleware
@@ -50,27 +58,12 @@ except:
             return decorator
     tracer = DummyTracer()
 
-# --- 4. INIT VERTEX AI ---
-# --- 4. INIT VERTEX AI (Move logic inside a function or check) ---
-model = None
-try:
-    # Explicitly load credentials to verify they work before init
-    if os.path.exists(CREDENTIALS_FILE):
-        vertexai.init(project=PROJECT_ID, location=LOCATION)
-        model = GenerativeModel("gemini-2.5-pro")
-        print("✅ Vertex AI Initialized Successfully")
-    else:
-        print("❌ Credentials file not found!")
-except Exception as e:
-    model = None
-    logger.error(f"Vertex Init Error: {e}")
-
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 if DD_ENABLED:
     app.add_middleware(TraceMiddleware, service="betawork-ai-engine")
 
-# --- 5. DATA MODEL (Flexible) ---
+# --- 5. DATA MODELS ---
 class QueryRequest(BaseModel):
     query: Optional[str] = None
     question: Optional[str] = None
@@ -79,7 +72,6 @@ class QueryRequest(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def check_query_or_question(cls, data):
-        # Allow 'question' to populate 'query' if 'query' is missing
         if not data.get('query') and data.get('question'):
             data['query'] = data['question']
         return data
@@ -88,9 +80,25 @@ class QueryRequest(BaseModel):
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
 def search_nigerian_laws(query: str):
     try:
-        client = discoveryengine.SearchServiceClient()
-        serving_config = f"projects/{PROJECT_ID}/locations/global/collections/default_collection/dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
-        req = discoveryengine.SearchRequest(serving_config=serving_config, query=query, page_size=3)
+        # FORCE CLIENT TO READ FILE
+        # We explicitly tell it where the global endpoint is
+        client_options = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
+        client = discoveryengine.SearchServiceClient(client_options=client_options)
+        
+        serving_config = client.serving_config_path(
+            project=PROJECT_ID,
+            location="global",
+            collection="default_collection",
+            data_store=DATA_STORE_ID,
+            serving_config="default_search",
+        )
+        
+        req = discoveryengine.SearchRequest(
+            serving_config=serving_config, 
+            query=query, 
+            page_size=3
+        )
+        
         response = client.search(req)
         
         context = ""
@@ -100,18 +108,19 @@ def search_nigerian_laws(query: str):
                 context += f"\n--- LAW SNIPPET ---\n{data['snippets'][0].get('snippet', '')}\n"
         return context
     except Exception as e:
-        logger.error(f"Search Failed: {e}")
+        # Log the specific error to debug
+        logger.error(f"Search API Error: {e}")
         return ""
 
 @tracer.wrap(name="generate_answer", service="betawork-ai-engine")
 def get_ai_response(user_query: str, mode: str):
-    if not model: return "AI System is offline (Auth Error)."
+    if not model: return "AI System Offline."
     
     if mode == "therapy":
-        prompt = f"You are BetaCare, a workplace therapist. Listen to this user: {user_query}. Be empathetic."
+        prompt = f"You are BetaCare, a therapist. User: '{user_query}'. Be empathetic."
     else:
         legal_context = search_nigerian_laws(user_query)
-        prompt = f"You are BetaBot, a Nigerian Tax Advisor.\n\nLEGAL CONTEXT:\n{legal_context}\n\nQUESTION: {user_query}\n\nANSWER:"
+        prompt = f"You are BetaBot, a Tax Advisor.\n\nCONTEXT:\n{legal_context}\n\nQUESTION: {user_query}\n\nANSWER:"
 
     try:
         response = model.generate_content(prompt)
@@ -119,20 +128,20 @@ def get_ai_response(user_query: str, mode: str):
     except Exception as e:
         return f"Thinking Error: {e}"
 
+# --- 7. ENDPOINTS ---
+@app.get("/")
+def root():
+    return {"status": "running", "service": "BetaWork AI Engine"}
+
 @app.post("/ask")
 async def ask_endpoint(req: QueryRequest):
-    # Ensure we have a valid query string from either field
     final_query = req.query or req.question
-    
     if not final_query:
-        raise HTTPException(status_code=400, detail="Please provide a 'query' or 'question'")
+        raise HTTPException(status_code=400, detail="Query required")
     
     answer = get_ai_response(final_query, req.mode)
     return {"answer": answer}
 
 if __name__ == "__main__":
-    import uvicorn
-    # Render provides the PORT env var. Default to 10000 locally.
     port = int(os.environ.get("PORT", 10000))
-    print(f"🚀 Starting Server on 0.0.0.0:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
