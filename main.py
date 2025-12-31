@@ -7,22 +7,23 @@ import vertexai
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional
+from typing import Optional, List
 from google.cloud import discoveryengine_v1beta as discoveryengine
 from vertexai.generative_models import GenerativeModel
-from google.api_core.client_options import ClientOptions
 from google.oauth2 import service_account
+from google.api_core.client_options import ClientOptions
 
-# --- CONFIGURATION (Same as before) ---
+# --- 1. CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("betabot")
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "silver-impulse-481722-v5")
+# Using the DATA STORE ID from your screenshot (Ending in 73637)
 DATA_STORE_ID = os.getenv("GCP_DATA_STORE_ID", "nigeria-compliance-engine_1766620773637")
 LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 CREDENTIALS_FILE = os.path.abspath("gcp_key.json")
 
-# --- AUTH SETUP (Same as before) ---
+# --- 2. AUTH SETUP ---
 my_credentials = None
 if os.getenv("GCP_CREDENTIALS_BASE64"):
     try:
@@ -34,7 +35,7 @@ if os.getenv("GCP_CREDENTIALS_BASE64"):
     except Exception as e:
         print(f"❌ Auth Error: {e}")
 
-# --- INIT VERTEX AI (Same as before) ---
+# --- 3. VERTEX INIT ---
 model = None
 try:
     vertexai.init(project=PROJECT_ID, location=LOCATION)
@@ -42,7 +43,7 @@ try:
 except Exception as e:
     logger.error(f"Vertex Init Failed: {e}")
 
-# --- DATADOG (Same as before) ---
+# --- 4. DATADOG ---
 try:
     from ddtrace import tracer, patch_all
     from ddtrace.contrib.fastapi import TraceMiddleware
@@ -61,11 +62,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 if DD_ENABLED:
     app.add_middleware(TraceMiddleware, service="betawork-ai-engine")
 
-# --- DATA MODELS (Same as before) ---
+# --- 5. DATA MODELS ---
 class QueryRequest(BaseModel):
     query: Optional[str] = None
     question: Optional[str] = None
     mode: str = "tax"
+
     @model_validator(mode='before')
     @classmethod
     def check_query_or_question(cls, data):
@@ -73,106 +75,105 @@ class QueryRequest(BaseModel):
             data['query'] = data['question']
         return data
 
-# --- IMPROVED LOGIC ---
+# Response Model for UI
+class APIResponse(BaseModel):
+    answer: str
+    sources: List[str]
+
+# --- 6. LOGIC ---
 
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
 def search_nigerian_laws(query: str):
-    if not my_credentials: return ""
+    """Returns List of Snippets"""
+    if not my_credentials: return []
 
     try:
-        # Create Client
         client_options = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
         client = discoveryengine.SearchServiceClient(
             credentials=my_credentials, 
             client_options=client_options
         )
         
-        # MANUAL STRING CONSTRUCTION (The Fix)
-        # Use the ENGINE ID (Search App ID ending in 13359)
-        # Format: projects/{project}/locations/{location}/collections/default_collection/engines/{engine_id}/servingConfigs/default_search
-        engine_id = "nigeria-compliance-engine_1766620713359"
+        # Enhanced Query for better RAG hits
+        enhanced_query = f"{query} regarding Nigeria Tax Law"
         
         serving_config = (
             f"projects/{PROJECT_ID}/locations/global/collections/default_collection/"
             f"dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
         )
         
-        print(f"🔎 Searching Data Store: {DATA_STORE_ID} for '{query}'...")
-        
         req = discoveryengine.SearchRequest(
             serving_config=serving_config, 
-            query=query, 
+            query=enhanced_query, 
             page_size=3
         )
         
         response = client.search(req)
-
-        # LOG RESULTS COUNT
-        print(f"📄 Results Found: {len(response.results)}")
+        print(f"🔎 Results Found: {len(response.results)}")
         
-        context = ""
+        sources = []
         for result in response.results:
             data = result.document.derived_struct_data
-            
-            # Try Snippets
             if 'snippets' in data and len(data['snippets']) > 0:
-                snippet = data['snippets'][0].get('snippet', '')
-                context += f"\n--- LAW SNIPPET ---\n{snippet}\n"
-            # Fallback: Extractive Segments
+                sources.append(data['snippets'][0].get('snippet', ''))
             elif 'extractive_segments' in data and len(data['extractive_segments']) > 0:
-                content = data['extractive_segments'][0].get('content', '')
-                context += f"\n--- LAW SEGMENT ---\n{content}\n"
+                sources.append(data['extractive_segments'][0].get('content', ''))
                 
-        return context
+        return sources
     except Exception as e:
         logger.error(f"Search API Error: {e}")
-        return ""
+        return []
 
 @tracer.wrap(name="generate_answer", service="betawork-ai-engine")
 def get_ai_response(user_query: str, mode: str):
-    if not model: return "AI System Offline."
+    if not model: return "AI System Offline.", []
+    
+    sources = []
     
     if mode == "therapy":
-        # THERAPY PROMPT (Unchanged)
         prompt = f"You are BetaCare, a therapist. User: '{user_query}'. Be empathetic."
     else:
-        # TAX PROMPT (HEAVILY IMPROVED)
-        legal_context = search_nigerian_laws(user_query)
-
-        # Only use fallback if context is truly empty
-        context_text = legal_context if legal_context else "No specific document found. Use general knowledge of FIRS, LIRS, and Nigerian Finance Acts."
+        # 1. RAG Search
+        sources = search_nigerian_laws(user_query)
+        
+        # 2. Context Construction
+        context_text = "\n\n".join([f"SOURCE {i+1}: {s}" for i, s in enumerate(sources)])
+        if not context_text:
+            context_text = "No specific document found. Use general knowledge of FIRS, LIRS, and Nigerian Finance Acts."
         
         prompt = f"""
-        You are BetaBot, a Nigerian Tax Compliance Advisor.
+        ROLE: You are BetaBot, a specialized Tax Compliance Consultant for Nigerian SMEs.
         
-        LEGAL CONTEXT (From Vector DB):
+        CONTEXT FROM NIGERIAN DOCUMENTS:
         {context_text}
         
         USER QUESTION: "{user_query}"
         
-        INSTRUCTIONS:
-        1. If LEGAL CONTEXT is available, cite it.
-        2. Keep the answer concise (under 150 words).
-        3. Use bullet points for clarity.
-        4. Focus on 'What to do'.
+        RULES:
+        1. **STRICTLY NIGERIAN CONTEXT:** Never mention "IRS" (US). Only mention "FIRS" (Federal) or "State IRS".
+        2. **SIMPLICITY:** Explain it like you are talking to a business owner.
+        3. **FORMATTING:** Use short paragraphs and Bullet Points.
+        4. **ACTIONABLE:** Tell them exactly what to do next.
         """
 
     try:
         response = model.generate_content(prompt)
-        return response.text
+        return response.text, sources
     except Exception as e:
-        return f"Thinking Error: {e}"
+        return f"Thinking Error: {e}", []
 
-# --- ENDPOINTS (Same as before) ---
+# --- 7. ENDPOINTS ---
 @app.get("/")
 def root(): return {"status": "running"}
 
-@app.post("/ask")
+@app.post("/ask", response_model=APIResponse)
 async def ask_endpoint(req: QueryRequest):
     final_query = req.query or req.question
     if not final_query: raise HTTPException(status_code=400, detail="Query required")
-    answer = get_ai_response(final_query, req.mode)
-    return {"answer": answer}
+    
+    answer_text, source_list = get_ai_response(final_query, req.mode)
+    
+    return {"answer": answer_text, "sources": source_list}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
