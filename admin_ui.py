@@ -17,13 +17,18 @@ st.set_page_config(
 # --- CSS FOR DARK MODE & READABILITY ---
 st.markdown("""
     <style>
-    /* Main Background */
+      /* 1. Main Background */
     .stApp {
         background-color: #0E1117;
     }
+
+    /* 2. Sidebar Background (THE FIX) */
+    [data-testid="stSidebar"] {
+        background-color: #262730;
+    }
     
-    /* General Text Color */
-    .stMarkdown, h1, h2, h3, p {
+    /* 3. Force All Text to be Light/White */
+    h1, h2, h3, h4, h5, h6, p, span, div, label {
         color: #E0E0E0 !important;
     }
 
@@ -205,3 +210,11 @@ with col_debug:
             
     else:
         st.info("Waiting for query... Ask a question on the left.")
+        st.markdown("""
+        **What happens when you ask?**
+        1. **FastAPI** receives query + Datadog Trace ID.
+        2. **Vertex AI Search** retrieves top 3 tax PDF chunks.
+        3. **BigQuery** fetches live Nigeria GDP/Inflation data.
+        4. **Gemini 2.5 Pro** synthesizes answer.
+        5. **Streamlit** visualizes the evidence.
+        """)

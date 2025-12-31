@@ -141,16 +141,27 @@ def search_nigerian_laws(query: str) -> List[dict]:
             title = derived.get("title")
             if not title:
                 # Fallback to filename from GS Link
-                link = derived.get("link", "Unknown Document")
-                title = link.split("/")[-1].replace(".pdf", "")
-            
+                link = derived.get("link", "")
+                
+                if link:
+                    title = link.split("/")[-1]
+                else:
+                    title = "Official Document"
+                            
             content = ""
-            if "extractiveAnswers" in derived:
+            # CHECK ALL CASES (Snake vs Camel)
+            if "extractive_answers" in derived:
+                content = derived["extractive_answers"][0].get("content", "")
+            elif "extractiveAnswers" in derived:
                 content = derived["extractiveAnswers"][0].get("content", "")
             elif "snippets" in derived:
                 content = derived["snippets"][0].get("snippet", "")
+            elif "extractive_segments" in derived:
+                content = derived["extractive_segments"][0].get("content", "")
             
             if content:
+                # Clean up newlines
+                content = content.replace("\n", " ").strip()
                 sources.append({"source": title, "content": content})
                 
         return sources
