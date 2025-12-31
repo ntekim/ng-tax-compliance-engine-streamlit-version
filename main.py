@@ -93,7 +93,7 @@ def get_economic_context():
     try:
         query = """
             SELECT indicator_name, value, year
-            FROM `bigquery-public-data.world_bank_wdi.indicators_data`
+            FROM `bigquery-public-data.world_bank_wdi.indicators`
             WHERE country_code = 'NGA'
             AND indicator_code IN ('NY.GDP.MKTP.KD.ZG', 'FP.CPI.TOTL.ZG')
             ORDER BY year DESC LIMIT 3
@@ -114,7 +114,6 @@ def search_nigerian_laws(query: str):
         # Use Default Client (Global Endpoint)
         client = discoveryengine.SearchServiceClient(credentials=my_credentials)
         
-        # Path to DATA STORE (Global)
         serving_config = (
             f"projects/{PROJECT_ID}/locations/global/collections/default_collection/"
             f"dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
@@ -133,90 +132,108 @@ def search_nigerian_laws(query: str):
         print(f"🔎 Results Found: {len(response.results)}")
         
         sources = []
-        for result in response.results:
-            # Convert Protobuf to Dict to make access safer
-            data = MessageToDict(result.document._pb)
-            derived = data.get("derivedStructData", {})
+        for i, result in enumerate(response.results):
+
+            # DEBUG LOGGING: Print the structure of the first result
+            if i == 0:
+                print(f"--- DEBUG RESULT #{i} STRUCTURE ---")
+                # Convert the full Document object to dict and print keys
+                doc_dict = MessageToDict(result.document._pb)
+                print(json.dumps(doc_dict, indent=2)) 
+                print("-----------------------------------")
+
+            # ATTEMPT 1: Derived Struct Data (The standard place)
+            data = result.document.derived_struct_data
             
-            # ATTEMPT 1: Snippets (Standard)
-            if "snippets" in derived:
-                for s in derived["snippets"]:
-                    sources.append(s.get("snippet", ""))
+            # Check Snippets
+            if 'snippets' in data:
+                for s in data['snippets']:
+                    sources.append(s.get('snippet', ''))
             
-            # ATTEMPT 2: Extractive Segments (PDFs often use this)
-            elif "extractiveSegments" in derived:
-                for s in derived["extractiveSegments"]:
-                    sources.append(s.get("content", ""))
-            
+            # Check Extractive Segments
+            if 'extractive_segments' in data:
+                for s in data['extractive_segments']:
+                    sources.append(s.get('content', ''))
+                    
             # ATTEMPT 3: Raw Text (Fallback)
             elif "structData" in data and "text" in data["structData"]:
                 sources.append(data["structData"]["text"][:500]) # First 500 chars
 
         # Filter empty strings
-        clean_sources = [s for s in sources if s.strip()]
+        clean_sources = [s for s in sources if s]
         return clean_sources[:3] # Return top 3
         
     except Exception as e:
         logger.error(f"Search API Error: {e}")
         return []
 
-@tracer.wrap(name="generate_answer", service="betawork-ai-engine")
+tracer.wrap(name="generate_answer", service="betawork-ai-engine")
 def get_ai_response(user_query: str, mode: str):
-    if not model: return "AI System Offline.", [], ""
+    if not model: return "AI System Offline.", []
     
+    # 1. Therapy Mode (Unchanged)
     if mode == "therapy":
         prompt = f"You are BetaCare, a therapist. User: '{user_query}'. Be empathetic."
         try:
-            return model.generate_content(prompt).text, [], ""
+            return model.generate_content(prompt).text, []
         except:
-            return "I am listening.", [], ""
+            return "I am listening.", []
 
-    # Mode 2: Business/Tax
-    
-    # 1. Fetch Context
+    # 2. Business/Tax Mode
     sources = search_nigerian_laws(user_query)
     econ_data = get_economic_context()
     
-    # 2. Build Prompt
     rag_text = ""
     if sources:
-        rag_text = "OFFICIAL DOCUMENTS FOUND:\n" + "\n---\n".join(sources)
-    else:
-        # If still empty, use fallback logic but DO NOT mock sources for the UI
-        rag_text = "No specific document found in Vector DB. Use general knowledge."
+        rag_text = "OFFICIAL DOCUMENTS:\n" + "\n".join(sources)
     
+    # THE HYBRID PROMPT
     prompt = f"""
-    You are BetaBot, a Nigerian Tax Advisor.
-    
+    ROLE: You are 'BetaBot', a Strategic Business Advisor for Nigerian SMEs.
+    You are an expert in Tax Law, Business Strategy, and Financial Growth.
+
     ECONOMIC CONTEXT:
     {econ_data}
-    
     {rag_text}
-    
+
     USER QUESTION: "{user_query}"
-    
+
     INSTRUCTIONS:
-    1. Answer based on the documents above if they exist.
-    2. Be professional and concise.
+    1. **CLASSIFY:** Is this a Tax/Legal question or a General Business question?
+    
+    2. **IF TAX/LEGAL:**
+       - Be precise. Cite the 'OFFICIAL DOCUMENTS' if available.
+       - Quote rates (7.5% VAT) and deadlines (21st).
+       - Keep it strict and compliant.
+
+    3. **IF GENERAL BUSINESS (e.g. "How to scale?", "Marketing tips"):**
+       - Be creative and strategic.
+       - Use the 'ECONOMIC CONTEXT' (Population/GDP) to give localized advice (e.g. "Given Nigeria's population of 200M...").
+       - Do NOT force tax laws into the answer unless relevant.
+
+    4. **TONE:** Professional, concise, and encouraging. Max 150 words.
     """
 
     try:
         response = model.generate_content(prompt)
         return response.text, sources, econ_data
     except Exception as e:
-        return f"Thinking Error: {e}", [], ""
-
+        return f"Thinking Error: {e}", []
+    
 # --- ENDPOINTS ---
-@app.get("/")
-def root(): return {"status": "running"}
-
 @app.post("/ask", response_model=APIResponse)
 async def ask_endpoint(req: QueryRequest):
     final_query = req.query or req.question
     if not final_query: raise HTTPException(status_code=400, detail="Query required")
     
+    # Unpack 3 values now
     answer, sources, econ_data = get_ai_response(final_query, req.mode)
-    return {"answer": answer, "sources": sources, "economic_data": econ_data}
+    
+    return {
+        "answer": answer,
+        "sources": sources,
+        "economic_data": econ_data # Send to Frontend
+    }
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
