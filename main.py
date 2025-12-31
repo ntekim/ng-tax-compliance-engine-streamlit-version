@@ -80,17 +80,14 @@ class QueryRequest(BaseModel):
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
 def search_nigerian_laws(query: str):
     try:
-        # FORCE CLIENT TO READ FILE
-        # We explicitly tell it where the global endpoint is
-        client_options = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
-        client = discoveryengine.SearchServiceClient(client_options=client_options)
+        # Create client
+        client = discoveryengine.SearchServiceClient()
         
-        serving_config = client.serving_config_path(
-            project=PROJECT_ID,
-            location="global",
-            collection="default_collection",
-            data_store=DATA_STORE_ID,
-            serving_config="default_search",
+        # FIX: Manually construct the string instead of using the helper method
+        # This prevents the 'unexpected keyword' error
+        serving_config = (
+            f"projects/{PROJECT_ID}/locations/{LOCATION}/collections/default_collection/"
+            f"dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
         )
         
         req = discoveryengine.SearchRequest(
@@ -108,7 +105,6 @@ def search_nigerian_laws(query: str):
                 context += f"\n--- LAW SNIPPET ---\n{data['snippets'][0].get('snippet', '')}\n"
         return context
     except Exception as e:
-        # Log the specific error to debug
         logger.error(f"Search API Error: {e}")
         return ""
 
