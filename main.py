@@ -91,11 +91,17 @@ def get_economic_context():
     try:
         # Use a simpler query on a very standard table
         query = """
-            SELECT country_name, midyear_population, year
-            FROM `bigquery-public-data.census_bureau_international.midyear_population`
-            WHERE country_code = 'NG'
-            ORDER BY year DESC LIMIT 1
+            SELECT indicator_name, value, year
+            FROM `bigquery-public-data.world_bank_wdi.indicators_data
+            WHERE country_code = 'NGA' 
+            AND indicator_code IN (
+                'NY.GDP.MKTP.KD.ZG', -- GDP Growth (annual %)
+                'FP.CPI.TOTL.ZG'     -- Inflation, consumer prices (annual %)
+            )
+            ORDER BY year DESC
+            LIMIT 4
         """
+        
         # Run query (Location automatic)
         results = bq_client.query(query).result()
         for row in results:
