@@ -6,13 +6,13 @@ import uvicorn
 import vertexai
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, model_validator
 from typing import Optional
 from google.cloud import discoveryengine_v1beta as discoveryengine
 from vertexai.generative_models import GenerativeModel
-from google.api_core.client_options import ClientOptions
+from google.oauth2 import service_account # <--- REQUIRED
 
-# --- 1. SETUP LOGGING & CONFIG ---
+# --- 1. CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("betabot")
 
@@ -21,7 +21,9 @@ DATA_STORE_ID = os.getenv("GCP_DATA_STORE_ID", "nigeria-compliance-engine_176662
 LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 CREDENTIALS_FILE = os.path.abspath("gcp_key.json")
 
-# --- 2. CRITICAL AUTH (WRITE FILE) ---
+# --- 2. AUTH SETUP ---
+my_credentials = None
+
 if os.getenv("GCP_CREDENTIALS_BASE64"):
     try:
         print("🔐 Decoding Credentials...")
@@ -29,15 +31,19 @@ if os.getenv("GCP_CREDENTIALS_BASE64"):
         with open(CREDENTIALS_FILE, "w") as f:
             f.write(decoded_key.decode("utf-8"))
         
-        # Set Env Var for ALL Google Libraries
+        # 1. Set Env Var (For Vertex AI)
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_FILE
-        print(f"✅ Auth File Ready at: {CREDENTIALS_FILE}")
+        
+        # 2. Load Object Explicitly (For Search Client)
+        my_credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_FILE)
+        print("✅ Explicit Credentials Object Created")
     except Exception as e:
-        print(f"❌ FATAL Auth Error: {e}")
+        print(f"❌ Auth Error: {e}")
 
-# --- 3. INIT AI MODELS ---
+# --- 3. INIT VERTEX AI ---
 model = None
 try:
+    # Vertex AI usually picks up the Env Var fine
     vertexai.init(project=PROJECT_ID, location=LOCATION)
     model = GenerativeModel("gemini-2.5-pro")
     print("✅ Vertex AI Connected")
@@ -79,16 +85,15 @@ class QueryRequest(BaseModel):
 # --- 6. LOGIC ---
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
 def search_nigerian_laws(query: str):
+    if not my_credentials:
+        logger.error("Missing Credentials Object")
+        return ""
+
     try:
-        # Create client
-        client = discoveryengine.SearchServiceClient()
+        # FIX: PASS CREDENTIALS EXPLICITLY
+        client = discoveryengine.SearchServiceClient(credentials=my_credentials)
         
-        # FIX: Manually construct the string instead of using the helper method
-        # This prevents the 'unexpected keyword' error
-        serving_config = (
-            f"projects/{PROJECT_ID}/locations/{LOCATION}/collections/default_collection/"
-            f"dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
-        )
+        serving_config = f"projects/{PROJECT_ID}/locations/global/collections/default_collection/dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
         
         req = discoveryengine.SearchRequest(
             serving_config=serving_config, 
@@ -106,6 +111,7 @@ def search_nigerian_laws(query: str):
         return context
     except Exception as e:
         logger.error(f"Search API Error: {e}")
+        # Return empty string so the user still gets a generic AI answer
         return ""
 
 @tracer.wrap(name="generate_answer", service="betawork-ai-engine")
@@ -127,7 +133,7 @@ def get_ai_response(user_query: str, mode: str):
 # --- 7. ENDPOINTS ---
 @app.get("/")
 def root():
-    return {"status": "running", "service": "BetaWork AI Engine"}
+    return {"status": "running"}
 
 @app.post("/ask")
 async def ask_endpoint(req: QueryRequest):

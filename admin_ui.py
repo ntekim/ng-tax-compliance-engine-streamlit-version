@@ -46,7 +46,7 @@ with st.sidebar:
     
     st.markdown("### 🔍 Observability")
     st.info("Traces are being sent to Datadog Agent.")
-    st.link_button("View Datadog Dashboard", "https://app.datadoghq.com/apm/traces")
+    st.link_button("View Datadog Dashboard", "https://us5.datadoghq.com/apm/traces")
 
 # --- MAIN LAYOUT ---
 st.title("🧠 BetaBot: Regulatory Command Center")
