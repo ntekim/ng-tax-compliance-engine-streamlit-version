@@ -83,7 +83,7 @@ class QueryRequest(BaseModel):
 class APIResponse(BaseModel):
     answer: str
     sources: List[str]
-
+    economic_data: str
 # --- 6. LOGIC ---
 
 def get_economic_context():
@@ -92,28 +92,16 @@ def get_economic_context():
         # Use a simpler query on a very standard table
         query = """
             SELECT indicator_name, value, year
-            FROM `bigquery-public-data.world_bank_wdi.indicators_data
-            WHERE country_code = 'NGA' 
-            AND indicator_code IN (
-                'NY.GDP.MKTP.KD.ZG', -- GDP Growth (annual %)
-                'FP.CPI.TOTL.ZG'     -- Inflation, consumer prices (annual %)
-            )
-            ORDER BY year DESC
-            LIMIT 4
+            FROM `bigquery-public-data.world_bank_wdi.indicators`
+            WHERE country_code = 'NGA'
+            AND indicator_code IN ('NY.GDP.MKTP.KD.ZG', 'FP.CPI.TOTL.ZG')
+            ORDER BY year DESC LIMIT 3
         """
-        
-        # Run query
-        query_job = bq_client.query(query)
-        results = query_job.result()
-        
-        context_str = "CURRENT NIGERIAN ECONOMIC DATA (World Bank):\n"
-        for row in results:
-            context_str += f"- {row.indicator_name} ({row.year}): {row.value:.2f}%\n"
-            
-        return context_str
-
+        results = bq_client.query(query).result()
+        stats = [f"- {row.indicator_name} ({row.year}): {row.value:.2f}%" for row in results]
+        return "\n".join(stats)
     except Exception as e:
-        logger.warning(f"BigQuery Data Unavailable: {e}") 
+        logger.error(f"BigQuery Error: {e}")
         return ""
 
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
@@ -185,7 +173,7 @@ def get_ai_response(user_query: str, mode: str):
     ROLE: You are 'BetaBot', a Strategic Business Advisor for Nigerian SMEs.
     You are an expert in Tax Law, Business Strategy, and Financial Growth.
 
-    DATA SOURCES:
+    ECONOMIC CONTEXT:
     {econ_data}
     {rag_text}
 
@@ -209,20 +197,24 @@ def get_ai_response(user_query: str, mode: str):
 
     try:
         response = model.generate_content(prompt)
-        return response.text, sources
+        return response.text, sources, econ_data
     except Exception as e:
         return f"Thinking Error: {e}", []
+    
 # --- ENDPOINTS ---
-@app.get("/")
-def root(): return {"status": "running"}
-
 @app.post("/ask", response_model=APIResponse)
 async def ask_endpoint(req: QueryRequest):
     final_query = req.query or req.question
     if not final_query: raise HTTPException(status_code=400, detail="Query required")
     
-    answer, sources = get_ai_response(final_query, req.mode)
-    return {"answer": answer, "sources": sources}
+    # Unpack 3 values now
+    answer, sources, econ_data = get_ai_response(final_query, req.mode)
+    
+    return {
+        "answer": answer,
+        "sources": sources,
+        "economic_data": econ_data # Send to Frontend
+    }
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
