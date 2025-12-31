@@ -94,8 +94,10 @@ def search_nigerian_laws(query: str):
         
         serving_config = (
             f"projects/{PROJECT_ID}/locations/global/collections/default_collection/"
-            f"engines/{engine_id}/servingConfigs/default_search"
+            f"dataStores/{DATA_STORE_ID}/servingConfigs/default_search"
         )
+        
+        print(f"🔎 Searching Data Store: {DATA_STORE_ID} for '{query}'...")
         
         req = discoveryengine.SearchRequest(
             serving_config=serving_config, 
@@ -104,12 +106,23 @@ def search_nigerian_laws(query: str):
         )
         
         response = client.search(req)
+
+        # LOG RESULTS COUNT
+        print(f"📄 Results Found: {len(response.results)}")
         
         context = ""
         for result in response.results:
             data = result.document.derived_struct_data
+            
+            # Try Snippets
             if 'snippets' in data and len(data['snippets']) > 0:
-                context += f"\n--- RELEVANT NIGERIAN LAW ---\n{data['snippets'][0].get('snippet', '')}\n"
+                snippet = data['snippets'][0].get('snippet', '')
+                context += f"\n--- LAW SNIPPET ---\n{snippet}\n"
+            # Fallback: Extractive Segments
+            elif 'extractive_segments' in data and len(data['extractive_segments']) > 0:
+                content = data['extractive_segments'][0].get('content', '')
+                context += f"\n--- LAW SEGMENT ---\n{content}\n"
+                
         return context
     except Exception as e:
         logger.error(f"Search API Error: {e}")
@@ -125,21 +138,23 @@ def get_ai_response(user_query: str, mode: str):
     else:
         # TAX PROMPT (HEAVILY IMPROVED)
         legal_context = search_nigerian_laws(user_query)
+
+        # Only use fallback if context is truly empty
+        context_text = legal_context if legal_context else "No specific document found. Use general knowledge of FIRS, LIRS, and Nigerian Finance Acts."
         
         prompt = f"""
-        ROLE: You are BetaBot, a specialized Tax Compliance Consultant for Nigerian SMEs.
+        You are BetaBot, a Nigerian Tax Compliance Advisor.
         
-        CONTEXT FROM NIGERIAN DOCUMENTS (RAG):
-        {legal_context if legal_context else "No specific document section found. Rely on your internal knowledge of FIRS, LIRS, and CAMA 2020."}
+        LEGAL CONTEXT (From Vector DB):
+        {context_text}
         
         USER QUESTION: "{user_query}"
         
-        RULES FOR ANSWERING:
-        1. **STRICTLY NIGERIAN CONTEXT:** Never mention "IRS" (US). Only mention "FIRS" (Federal) or "State IRS" (LIRS, etc).
-        2. **SIMPLICITY:** Explain it like you are talking to a 25-year-old business owner, not a lawyer. Avoid jargon.
-        3. **FORMATTING:** Use short paragraphs and Bullet Points.
-        4. **BE CONCISE:** Keep the answer under 200 words.
-        5. **ACTIONABLE:** Tell them exactly what to do next (e.g., "File via TaxPro Max" or "Log this as an expense").
+        INSTRUCTIONS:
+        1. If LEGAL CONTEXT is available, cite it.
+        2. Keep the answer concise (under 150 words).
+        3. Use bullet points for clarity.
+        4. Focus on 'What to do'.
         """
 
     try:
