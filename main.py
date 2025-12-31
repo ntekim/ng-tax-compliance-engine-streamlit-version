@@ -102,13 +102,17 @@ def get_economic_context():
             LIMIT 4
         """
         
-        # Run query (Location automatic)
-        results = bq_client.query(query).result()
+        # Run query
+        query_job = bq_client.query(query)
+        results = query_job.result()
+        
+        context_str = "CURRENT NIGERIAN ECONOMIC DATA (World Bank):\n"
         for row in results:
-            return f"NIGERIA CONTEXT (BigQuery): Population approx {row.midyear_population:,} ({row.year}). Market size is significant."
-        return ""
+            context_str += f"- {row.indicator_name} ({row.year}): {row.value:.2f}%\n"
+            
+        return context_str
+
     except Exception as e:
-        # Log warning but don't crash
         logger.warning(f"BigQuery Data Unavailable: {e}") 
         return ""
 
