@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 from google.cloud import discoveryengine_v1beta as discoveryengine
 from vertexai.generative_models import GenerativeModel
+from google.api_core.client_options import ClientOptions
 from google.oauth2 import service_account
 
 # --- CONFIGURATION (Same as before) ---
@@ -79,24 +80,26 @@ def search_nigerian_laws(query: str):
     if not my_credentials: return ""
 
     try:
-        client = discoveryengine.SearchServiceClient(credentials=my_credentials)
+        # Create Client
+        client_options = ClientOptions(api_endpoint="discoveryengine.googleapis.com")
+        client = discoveryengine.SearchServiceClient(
+            credentials=my_credentials, 
+            client_options=client_options
+        )
         
-        # FIX 1: OPTIMIZE QUERY
-        # If user types "Business Policy", we send "Business Policy Nigeria Tax Law"
-        # This helps the Search Engine find relevant docs instead of returning nothing.
-        enhanced_query = f"{query} regarding Nigeria Tax and Finance Act"
-        ENGINE_ID = "nigeria-compliance-engine_1766620713359"
-        serving_config = client.serving_config_path(
-            project=PROJECT_ID,
-            location="global",
-            collection="default_collection",
-            data_store=ENGINE_ID,
-            serving_config="default_search",
+        # MANUAL STRING CONSTRUCTION (The Fix)
+        # Use the ENGINE ID (Search App ID ending in 13359)
+        # Format: projects/{project}/locations/{location}/collections/default_collection/engines/{engine_id}/servingConfigs/default_search
+        engine_id = "nigeria-compliance-engine_1766620713359"
+        
+        serving_config = (
+            f"projects/{PROJECT_ID}/locations/global/collections/default_collection/"
+            f"engines/{engine_id}/servingConfigs/default_search"
         )
         
         req = discoveryengine.SearchRequest(
             serving_config=serving_config, 
-            query=enhanced_query, 
+            query=query, 
             page_size=3
         )
         
