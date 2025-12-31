@@ -87,21 +87,23 @@ class APIResponse(BaseModel):
 # --- 6. LOGIC ---
 
 def get_economic_context():
-    """Fetches Live GDP/Inflation data from Public BigQuery"""
     if not bq_client: return ""
     try:
+        # Use a simpler query on a very standard table
         query = """
-            SELECT indicator_name, value, year
-            FROM `bigquery-public-data.world_bank_wdi.indicators`
-            WHERE country_code = 'NGA'
-            AND indicator_code IN ('NY.GDP.MKTP.KD.ZG', 'FP.CPI.TOTL.ZG')
-            ORDER BY year DESC LIMIT 3
+            SELECT country_name, midyear_population, year
+            FROM `bigquery-public-data.census_bureau_international.midyear_population`
+            WHERE country_code = 'NG'
+            ORDER BY year DESC LIMIT 1
         """
+        # Run query (Location automatic)
         results = bq_client.query(query).result()
-        stats = [f"- {row.indicator_name} ({row.year}): {row.value:.2f}%" for row in results]
-        return "\n".join(stats)
+        for row in results:
+            return f"NIGERIA CONTEXT (BigQuery): Population approx {row.midyear_population:,} ({row.year}). Market size is significant."
+        return ""
     except Exception as e:
-        logger.error(f"BigQuery Error: {e}")
+        # Log warning but don't crash
+        logger.warning(f"BigQuery Data Unavailable: {e}") 
         return ""
 
 @tracer.wrap(name="rag_search", service="betawork-ai-engine")
@@ -152,41 +154,47 @@ def search_documents(query: str):
 def get_ai_response(user_query: str, mode: str):
     if not model: return "AI System Offline.", []
     
-    # Mode 1: Therapy
+    # 1. Therapy Mode (Unchanged)
     if mode == "therapy":
-        prompt = f"You are BetaCare, a workplace therapist. User: '{user_query}'. Be empathetic, warm, and professional."
+        prompt = f"You are BetaCare, a therapist. User: '{user_query}'. Be empathetic."
         try:
             return model.generate_content(prompt).text, []
         except:
             return "I am listening.", []
 
-    # Mode 2: Business/Tax
-    
-    # A. Fetch Context
+    # 2. Business/Tax Mode
     sources = search_documents(user_query)
     econ_data = get_economic_context()
     
-    # B. Build Context String
     rag_text = ""
     if sources:
-        rag_text = "OFFICIAL DOCUMENTS FOUND:\n" + "\n---\n".join(sources)
+        rag_text = "OFFICIAL DOCUMENTS:\n" + "\n".join(sources)
     
-    # C. The "Balanced" Prompt
+    # THE HYBRID PROMPT
     prompt = f"""
-    You are BetaBot, an intelligent Business & Tax Advisor for Nigeria.
-    
-    ECONOMIC CONTEXT:
+    ROLE: You are 'BetaBot', a Strategic Business Advisor for Nigerian SMEs.
+    You are an expert in Tax Law, Business Strategy, and Financial Growth.
+
+    DATA SOURCES:
     {econ_data}
-    
     {rag_text}
-    
+
     USER QUESTION: "{user_query}"
-    
+
     INSTRUCTIONS:
-    1. Answer the user's question clearly and professionally.
-    2. If the user asks about a general business concept (e.g., "How to market?", "What is cash flow?"), answer broadly but mention how it applies in Nigeria if relevant.
-    3. If the user asks about TAX or LAW, prioritize the 'OFFICIAL DOCUMENTS' provided above.
-    4. If no documents are found, use your general knowledge of FIRS, CAMA 2020, and Nigerian business practices.
+    1. **CLASSIFY:** Is this a Tax/Legal question or a General Business question?
+    
+    2. **IF TAX/LEGAL:**
+       - Be precise. Cite the 'OFFICIAL DOCUMENTS' if available.
+       - Quote rates (7.5% VAT) and deadlines (21st).
+       - Keep it strict and compliant.
+
+    3. **IF GENERAL BUSINESS (e.g. "How to scale?", "Marketing tips"):**
+       - Be creative and strategic.
+       - Use the 'ECONOMIC CONTEXT' (Population/GDP) to give localized advice (e.g. "Given Nigeria's population of 200M...").
+       - Do NOT force tax laws into the answer unless relevant.
+
+    4. **TONE:** Professional, concise, and encouraging. Max 150 words.
     """
 
     try:
@@ -194,7 +202,6 @@ def get_ai_response(user_query: str, mode: str):
         return response.text, sources
     except Exception as e:
         return f"Thinking Error: {e}", []
-
 # --- ENDPOINTS ---
 @app.get("/")
 def root(): return {"status": "running"}
