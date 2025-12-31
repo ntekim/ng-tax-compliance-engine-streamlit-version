@@ -21,7 +21,7 @@ logger = logging.getLogger("betabot")
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "silver-impulse-481722-v5")
 # The App ID from your screenshot (Ending in 13359) used for path construction
 ENGINE_ID = "nigeria-compliance-engine_1766620713359" 
-LOCATION = os.getenv("GCP_LOCATION", "us-central1")
+LOCATION = os.getenv("GCP_LOCATION", "global")
 CREDENTIALS_FILE = os.path.abspath("gcp_key.json")
 
 # --- 2. AUTH SETUP ---
