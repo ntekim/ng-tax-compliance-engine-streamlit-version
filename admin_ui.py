@@ -172,13 +172,21 @@ with col_debug:
         
         with tab_rag:
             if meta['sources'] and len(meta['sources']) > 0:
-                st.caption(f"✅ Retrieved {len(meta['sources'])} chunks from Knowledge Base")
-                for i, src in enumerate(meta['sources']):
-                    with st.expander(f"📄 Document Excerpt #{i+1}", expanded=(i==0)):
-                        # Force Dark Box for Readability
-                        st.markdown(f'<div class="doc-box">{src}</div>', unsafe_allow_html=True)
+                st.caption(f"✅ Retrieved {len(meta['sources'])} chunks")
+                
+                for i, doc in enumerate(meta['sources']):
+                    # doc is now a dict: {'source': 'CAMA 2020', 'content': '...'}
+                    
+                    doc_title = doc.get('source', f'Document #{i+1}')
+                    doc_content = doc.get('content', '')
+                    
+                    with st.expander(f"📄 {doc_title}", expanded=(i==0)):
+                        # Nice header for the citation
+                        st.markdown(f"**Source:** *{doc_title}*", unsafe_allow_html=True)
+                        # The text content
+                        st.markdown(f'<div class="doc-box">{doc_content}</div>', unsafe_allow_html=True)
             else:
-                st.warning("No specific documents found. LLM used general knowledge.")
+                st.warning("No documents found.")
 
         with tab_bq:
             if meta['economic_data']:
