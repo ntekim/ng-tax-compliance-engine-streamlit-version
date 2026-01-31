@@ -249,6 +249,33 @@ async def ask_endpoint(req: QueryRequest):
         "economic_data": econ_data # Send to Frontend
     }
 
+# Add this to your get_ai_response logic or create a new endpoint /analyze
+@app.post("/analyze-business")
+async def analyze_business(data: dict):
+    """
+    Input: Aggregated financial data
+    Output: Actionable business strategy & health report
+    """
+    prompt = f"""
+    You are the 'BetaWorkOS Virtual CFO'. 
+    Analyze the following financial summary for a Nigerian SME:
+    
+    Month: {data['month']}
+    Revenue: {data['revenue']}
+    Expenses: {data['expenses']}
+    Top Expense Category: {data['top_expense']}
+    Revenue Change: {data['growth_rate']}%
+    
+    INSTRUCTIONS:
+    1. Assess the financial health (Excellent, Stable, or At Risk).
+    2. Identify one specific risk (e.g. 'Your burn rate is increasing faster than revenue').
+    3. Suggest one strategic move (e.g. 'You have ₦2M idle in your wallet, consider investing in equipment for tax shield').
+    4. Keep it to 3 bullet points. No jargon.
+    """
+    
+    response = model.generate_content(prompt)
+    return {"analysis": response.text}
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
